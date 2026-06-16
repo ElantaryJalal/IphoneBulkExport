@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Bundled ffmpeg binary (downloaded by build scripts)
+ffmpeg.exe
+
+# Local export output / logs
+failures.txt
+not_on_device.txt
+iPhoneBackup/
+
+# Vercel
+.vercel/
+
+# OS
+Thumbs.db
+.DS_Store
+build-venv/
+
+# Local export output (personal photos)
+dest/

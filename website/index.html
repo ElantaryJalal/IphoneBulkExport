@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>iPhone Exporter — bulk-export your iPhone photos &amp; videos over USB</title>
+<meta name="description" content="A free Windows app that copies all your iPhone photos and videos to your PC over USB. No iCloud, no subscription. Pick exactly what you want, keep originals or convert to JPG/MP4." />
+
+<!-- Open Graph / social preview -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="iPhone Exporter for Windows" />
+<meta property="og:description" content="Bulk-export all your iPhone photos and videos to your PC over USB. Free. No iCloud." />
+<meta property="og:image" content="/og.png" />
+
+<!-- Emoji favicon (no file needed) -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📲</text></svg>" />
+
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#141821; --panel-2:#1b2030; --text:#e8ecf3;
+    --muted:#9aa6bd; --brand:#5b8cff; --brand-2:#7a5cff; --ok:#27c281;
+    --ring:rgba(122,92,255,.35); --border:#232a3a;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--brand); text-decoration:none}
+  .wrap{max-width:1040px; margin:0 auto; padding:0 22px}
+  .muted{color:var(--muted)}
+
+  /* Hero */
+  header.hero{
+    position:relative; overflow:hidden;
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(91,140,255,.20), transparent 60%),
+      radial-gradient(900px 500px at 10% 0%, rgba(122,92,255,.18), transparent 55%);
+    border-bottom:1px solid var(--border);
+  }
+  nav{display:flex; align-items:center; justify-content:space-between; padding:20px 0}
+  .logo{display:flex; align-items:center; gap:10px; font-weight:700; font-size:18px}
+  .logo .badge{font-size:22px}
+  nav .links a{color:var(--muted); margin-left:22px; font-size:14px}
+  nav .links a:hover{color:var(--text)}
+
+  .hero-inner{padding:64px 0 84px; text-align:center}
+  .pill{display:inline-block; padding:6px 14px; border:1px solid var(--border);
+    border-radius:999px; color:var(--muted); font-size:13px; background:var(--panel); margin-bottom:22px}
+  h1{font-size:clamp(34px,6vw,58px); line-height:1.05; margin:.1em 0 .25em; letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(90deg,var(--brand),var(--brand-2)); -webkit-background-clip:text; background-clip:text; color:transparent}
+  .sub{font-size:clamp(16px,2.4vw,21px); color:var(--muted); max-width:680px; margin:0 auto 34px}
+
+  .cta{display:flex; gap:14px; justify-content:center; flex-wrap:wrap; align-items:center}
+  .btn{
+    display:inline-flex; align-items:center; gap:10px; cursor:pointer;
+    padding:15px 26px; border-radius:12px; font-weight:650; font-size:16px; border:1px solid transparent;
+  }
+  .btn-primary{background:linear-gradient(90deg,var(--brand),var(--brand-2)); color:#fff; box-shadow:0 10px 30px -8px var(--ring)}
+  .btn-primary:hover{filter:brightness(1.07); transform:translateY(-1px)}
+  .btn-ghost{background:var(--panel); border-color:var(--border); color:var(--text)}
+  .btn-ghost:hover{border-color:#33405c}
+  .dl-meta{margin-top:14px; font-size:13px; color:var(--muted)}
+  .dl-meta b{color:var(--text)}
+
+  /* Sections */
+  section{padding:64px 0}
+  h2{font-size:clamp(24px,3.4vw,34px); margin:0 0 8px; letter-spacing:-.01em}
+  .lead{color:var(--muted); margin:0 0 34px; max-width:680px}
+
+  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:22px}
+  .card .ic{font-size:24px; margin-bottom:10px}
+  .card h3{margin:0 0 6px; font-size:17px}
+  .card p{margin:0; color:var(--muted); font-size:14.5px}
+
+  /* Steps */
+  .steps{display:grid; grid-template-columns:repeat(3,1fr); gap:18px; counter-reset:s}
+  @media(max-width:760px){.steps{grid-template-columns:1fr}}
+  .step{background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:24px; position:relative}
+  .step::before{counter-increment:s; content:counter(s); position:absolute; top:-14px; left:22px;
+    width:30px; height:30px; display:grid; place-items:center; border-radius:8px;
+    background:linear-gradient(90deg,var(--brand),var(--brand-2)); color:#fff; font-weight:700; font-size:15px}
+  .step h3{margin:8px 0 6px; font-size:17px}
+  .step p{margin:0; color:var(--muted); font-size:14.5px}
+
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:28px}
+  ul.req{margin:0; padding-left:0; list-style:none}
+  ul.req li{padding:8px 0 8px 28px; position:relative; color:var(--muted); border-bottom:1px solid var(--border)}
+  ul.req li:last-child{border-bottom:0}
+  ul.req li::before{content:"✓"; position:absolute; left:0; color:var(--ok); font-weight:700}
+  ul.req li b{color:var(--text)}
+
+  details{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:6px 18px; margin-bottom:12px}
+  details summary{cursor:pointer; font-weight:600; padding:12px 0; list-style:none}
+  details summary::-webkit-details-marker{display:none}
+  details summary::after{content:"＋"; float:right; color:var(--muted)}
+  details[open] summary::after{content:"－"}
+  details p{margin:0 0 14px; color:var(--muted)}
+
+  .note{background:var(--panel-2); border:1px solid var(--border); border-left:3px solid var(--brand);
+    border-radius:8px; padding:14px 16px; color:var(--muted); font-size:14px; margin-top:18px}
+
+  footer{border-top:1px solid var(--border); padding:34px 0; color:var(--muted); font-size:13px}
+  footer .row{display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap}
+  code{background:var(--panel-2); border:1px solid var(--border); padding:1px 7px; border-radius:6px; font-size:13px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <nav>
+      <div class="logo"><span class="badge">📲</span> iPhone Exporter</div>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#requirements">Requirements</a>
+        <a href="#faq">FAQ</a>
+        <a id="gh" href="#" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+
+    <div class="hero-inner">
+      <span class="pill">Free • Windows • No iCloud, no subscription</span>
+      <h1>Get <span class="grad">every photo &amp; video</span><br/>off your iPhone — over USB.</h1>
+      <p class="sub">A tiny desktop app that bulk-copies your entire camera roll to your PC.
+        Pick exactly what you want, keep originals or convert to JPG/MP4, and pick up where
+        you left off if it stops. No cloud required.</p>
+
+      <div class="cta">
+        <a id="download" class="btn btn-primary" href="#">⬇ Download for Windows</a>
+        <a href="#how" class="btn btn-ghost">See how it works</a>
+      </div>
+      <div class="dl-meta">
+        <b id="ver">v1.0</b> · Windows 10/11 (64-bit) · <span id="size">~90&nbsp;MB</span> ·
+        requires the free Apple Devices app
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section id="features">
+    <h2>Why it’s different</h2>
+    <p class="lead">It reads your phone’s actual photo library — the same way iMazing does —
+      so nothing gets missed, and you stay in control.</p>
+    <div class="grid">
+      <div class="card"><div class="ic">📂</div><h3>Your whole library</h3>
+        <p>Reads <code>Photos.sqlite</code> for every asset with real capture dates — not just
+        the DCIM folder Windows shows you.</p></div>
+      <div class="card"><div class="ic">✅</div><h3>Pick exactly what you want</h3>
+        <p>A checkable list with date and type filters. Export everything, or just your 2024
+        videos, or a hand-picked set.</p></div>
+      <div class="card"><div class="ic">🔁</div><h3>Resumable</h3>
+        <p>Already-copied files are skipped. If a transfer stops, just run it again — it
+        continues where it left off.</p></div>
+      <div class="card"><div class="ic">🖼️</div><h3>Keep or convert</h3>
+        <p>Keep originals (HEIC/MOV), or convert to universal <b>JPG</b> and <b>MP4</b> on the
+        way out.</p></div>
+      <div class="card"><div class="ic">☁️</div><h3>Honest about iCloud</h3>
+        <p>Photos stored only in iCloud aren’t on the phone — the app lists them so you know
+        exactly what to download.</p></div>
+      <div class="card"><div class="ic">🔌</div><h3>No cloud, no account</h3>
+        <p>Everything happens locally over the USB cable. Your photos never touch a server.</p></div>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>Three steps</h2>
+    <p class="lead">Plug in, choose, export.</p>
+    <div class="steps">
+      <div class="step"><h3>Connect &amp; trust</h3>
+        <p>Plug the iPhone in, unlock it, tap <b>Trust</b>. The status light turns green.</p></div>
+      <div class="step"><h3>Scan &amp; choose</h3>
+        <p>Pick a folder, hit <b>Scan &amp; Choose</b>, then tick the photos/videos you want.</p></div>
+      <div class="step"><h3>Export</h3>
+        <p>Watch the progress bar. Originals or JPG/MP4 — your call. Done.</p></div>
+    </div>
+    <div class="note">💡 For big libraries, set the iPhone’s <b>Auto-Lock to Never</b> while it runs —
+      a locked phone interrupts the USB connection.</div>
+  </section>
+
+  <section id="requirements">
+    <h2>What you need</h2>
+    <div class="panel">
+      <ul class="req">
+        <li><b>Windows 10 or 11</b> (64-bit).</li>
+        <li>The free <b>Apple Devices</b> app (or iTunes) from the Microsoft Store — it installs
+          the USB driver. You don’t have to open it.</li>
+        <li>A <b>data-capable USB cable</b> (the charging cable works).</li>
+        <li>Enough free disk space for your photos (the app shows the total before it starts).</li>
+      </ul>
+      <div class="note">Optional: install the free <b>HEIF Image Extensions</b> from the Store to
+        preview <code>.HEIC</code> photos in Windows — or just use the “Convert to JPG” option.</div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>FAQ</h2>
+    <details><summary>Windows says “Windows protected your PC” when I open it</summary>
+      <p>That’s SmartScreen warning about a new, unsigned app — normal for indie tools. Click
+        <b>More info → Run anyway</b>. The app is open source; you can read or build it yourself.</p></details>
+    <details><summary>Do I need iTunes or an iCloud account?</summary>
+      <p>No iCloud account. You do need the Apple <b>USB driver</b>, which comes from the free
+        Apple Devices app (or iTunes) in the Microsoft Store. The app never signs in anywhere.</p></details>
+    <details><summary>Some photos didn’t copy</summary>
+      <p>Those are stored <b>only in iCloud</b> (with “Optimize iPhone Storage” on), so they aren’t
+        physically on the phone — no USB tool can fetch them. The app lists them in
+        <code>not_on_device.txt</code>. Turn on <b>Settings → Photos → Download and Keep Originals</b>,
+        let it sync, then run again.</p></details>
+    <details><summary>Is it safe? Where do my photos go?</summary>
+      <p>Straight from the cable to the folder you choose — nothing is uploaded. The code is open
+        source on GitHub.</p></details>
+  </section>
+
+  <section style="text-align:center; padding-top:24px">
+    <h2>Ready?</h2>
+    <p class="lead" style="margin-inline:auto">Free download, no sign-up.</p>
+    <a class="btn btn-primary" href="#" onclick="document.getElementById('download').click();return false;">⬇ Download for Windows</a>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap row">
+    <div>© <span id="yr"></span> iPhone Exporter · Free &amp; open source.</div>
+    <div>Not affiliated with, or endorsed by, Apple Inc. “iPhone” is a trademark of Apple Inc.</div>
+  </div>
+</footer>
+
+<script>
+  /* ────────── CONFIG: edit these two after you build & upload the .exe ────────── */
+  // Recommended: a GitHub Releases asset (handles big files & version pinning).
+  const DOWNLOAD_URL = "https://github.com/ElantaryJalal/IphoneBulkExport/releases/latest/download/iPhoneExporter.exe";
+  const GITHUB_URL   = "https://github.com/ElantaryJalal/IphoneBulkExport";
+  const VERSION      = "v1.0";
+  const SIZE_TEXT    = "~112 MB";
+  /* ───────────────────────────────────────────────────────────────────────────── */
+
+  document.getElementById("download").href = DOWNLOAD_URL;
+  document.getElementById("gh").href = GITHUB_URL;
+  document.getElementById("ver").textContent = VERSION;
+  document.getElementById("size").textContent = SIZE_TEXT;
+  document.getElementById("yr").textContent = new Date().getFullYear();
+</script>
+</body>
+</html>

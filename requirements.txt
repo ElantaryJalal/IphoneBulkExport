@@ -1,0 +1,8 @@
+# iPhone Bulk Exporter (iphone_export.py / iphone_export_gui.py).
+# Needs the Apple Mobile Device USB driver (iTunes or the Apple Devices app).
+pymobiledevice3>=2.30.0
+tqdm>=4.66.0
+
+# Optional — only for HEIC->JPG conversion (--jpg):
+# pillow>=10.0.0
+# pillow-heif>=0.13.0
