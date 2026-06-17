@@ -25,3 +25,6 @@ build-venv/
 
 # Local export output (personal photos)
 dest/
+
+# Build log
+build.log

@@ -138,7 +138,7 @@
       </div>
       <div class="dl-meta">
         <b id="ver">v1.0</b> · Windows 10/11 (64-bit) · <span id="size">~90&nbsp;MB</span> ·
-        requires the free Apple Devices app
+        one installer, sets up everything
       </div>
     </div>
   </div>
@@ -191,11 +191,15 @@
     <div class="panel">
       <ul class="req">
         <li><b>Windows 10 or 11</b> (64-bit).</li>
-        <li>The free <b>Apple Devices</b> app (or iTunes) from the Microsoft Store — it installs
-          the USB driver. You don’t have to open it.</li>
+        <li><b>Nothing else to install.</b> The installer sets up the small Apple USB driver for
+          you automatically (needs internet during install) — no iTunes, no manual steps. Then
+          just plug in, unlock, and tap <b>Trust</b>.</li>
         <li>A <b>data-capable USB cable</b> (the charging cable works).</li>
         <li>Enough free disk space for your photos (the app shows the total before it starts).</li>
       </ul>
+      <div class="note">Offline or no driver? The app automatically falls back to <b>MTP</b> —
+        Windows’ built-in iPhone connection — so it still exports your on-device photos &amp;
+        videos with no Apple software at all.</div>
       <div class="note">Optional: install the free <b>HEIF Image Extensions</b> from the Store to
         preview <code>.HEIC</code> photos in Windows — or just use the “Convert to JPG” option.</div>
     </div>
@@ -207,8 +211,10 @@
       <p>That’s SmartScreen warning about a new, unsigned app — normal for indie tools. Click
         <b>More info → Run anyway</b>. The app is open source; you can read or build it yourself.</p></details>
     <details><summary>Do I need iTunes or an iCloud account?</summary>
-      <p>No iCloud account. You do need the Apple <b>USB driver</b>, which comes from the free
-        Apple Devices app (or iTunes) in the Microsoft Store. The app never signs in anywhere.</p></details>
+      <p>No iTunes, no iCloud account. The installer sets up just the small <b>Apple USB driver</b>
+        (Apple Mobile Device Support) automatically — that’s the only Apple piece, and you never
+        have to download or open iTunes. If it can’t install (offline, etc.), the app falls back to
+        Windows’ built-in <b>MTP</b> connection and still works. It never signs in anywhere.</p></details>
     <details><summary>Some photos didn’t copy</summary>
       <p>Those are stored <b>only in iCloud</b> (with “Optimize iPhone Storage” on), so they aren’t
         physically on the phone — no USB tool can fetch them. The app lists them in
@@ -237,10 +243,10 @@
 <script>
   /* ────────── CONFIG: edit these two after you build & upload the .exe ────────── */
   // Recommended: a GitHub Releases asset (handles big files & version pinning).
-  const DOWNLOAD_URL = "https://github.com/ElantaryJalal/IphoneBulkExport/releases/latest/download/iPhoneExporter.exe";
+  const DOWNLOAD_URL = "https://github.com/ElantaryJalal/IphoneBulkExport/releases/latest/download/iPhoneExporterSetup.exe";
   const GITHUB_URL   = "https://github.com/ElantaryJalal/IphoneBulkExport";
   const VERSION      = "v1.0";
-  const SIZE_TEXT    = "~115 MB";
+  const SIZE_TEXT    = "~118 MB";
   /* ───────────────────────────────────────────────────────────────────────────── */
 
   document.getElementById("download").href = DOWNLOAD_URL;

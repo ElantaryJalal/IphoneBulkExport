@@ -1,15 +1,30 @@
 # iPhone Photo & Video Bulk Exporter (Windows, USB)
 
 Copy **all photos and videos** off an iPhone over USB into a folder on your PC.
-No iCloud, no WSL. There's a desktop **GUI** (`iphone_export_gui.py`) and a
-**command-line** version (`iphone_export.py`) — both share the same transfer
-engine.
+No iCloud, no WSL.
 
-It uses [`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3) and the
-**AFC** protocol for true byte-streaming with exact file sizes. It recursively
-finds every photo/video, preserves filenames + folder structure
-(`100APPLE`, `101APPLE`, …) and modified dates, shows a progress bar, **skips
-already-copied files (resumable)**, and logs failures to `failures.log`.
+The desktop **GUI** (`iphone_export_gui.py`) works **with or without Apple
+software**:
+
+- **No Apple software installed?** It uses **MTP** — the same channel Windows
+  File Explorer uses — through the built-in Windows driver. Just plug in, unlock,
+  tap **Trust**, and export your on-device photos & videos.
+- **Apple Mobile Device driver present** (iTunes / Apple Devices app)? It uses
+  the faster **AFC** path and unlocks **full-library mode**: every asset with
+  real capture dates, plus a list of iCloud-only photos.
+
+The GUI picks automatically — AFC when the driver is available, MTP otherwise.
+
+Two command-line tools back the same engines:
+
+| Script | Protocol | Needs | Gets you |
+| --- | --- | --- | --- |
+| `iphone_export.py` | AFC | Apple USB driver | exact sizes, `--library`, iCloud-only report |
+| `iphone_export_mtp.py` | MTP | `pip install pywin32 tqdm` — **no Apple software** | DCIM export, resume |
+
+Both recursively find every photo/video, preserve filenames + folder structure
+(`100APPLE`, `101APPLE`, …) and modified dates, show a progress bar, **skip
+already-copied files (resumable)**, and log failures to `failures.log`.
 
 ---
 
@@ -112,6 +127,26 @@ database** (`/PhotoData/Photos.sqlite`) off the device and reads it to build the
 
 This mode needs the phone **unlocked and trusted** (the Photos database is only
 readable then).
+
+---
+
+## No-Apple-software CLI — `iphone_export_mtp.py`
+
+If you can't (or don't want to) install any Apple software, this script exports
+over **MTP** using Windows' built-in driver — the same thing File Explorer uses.
+
+```powershell
+pip install pywin32 tqdm        # or: pip install -r requirements-mtp.txt
+python iphone_export_mtp.py --dest "D:\iPhoneBackup"
+```
+
+Plug in, unlock, tap **Trust**. Options: `--dest/-d` (required), `--device`,
+`--full` (whole Internal Storage, not just DCIM), `--all`, `--timeout`, `--log`.
+
+Trade-offs vs. AFC: no `--library` / iCloud-only report and no exact-size
+streaming (MTP doesn't expose the Photos database), but it needs **zero Apple
+software**. The GUI uses this same path automatically when the Apple driver
+isn't present.
 
 ---
 

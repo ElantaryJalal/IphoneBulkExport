@@ -7,6 +7,12 @@ A tkinter front-end over the proven async engine in iphone_export.py
 asyncio loop; all UI updates are marshaled to the main thread through a
 thread-safe queue, so the window never freezes.
 
+If the Apple Mobile Device driver (iTunes / Apple Devices app) isn't installed,
+usbmuxd is unreachable and AFC can't be used. In that case the app falls back
+automatically to MTP (the same channel File Explorer uses) via the built-in
+Windows driver — no Apple software required. MTP mode covers DCIM export with
+resume + optional conversion, but not the full-library / iCloud-only report.
+
 Flow:
   1. "Scan & Choose…" connects and lists every photo/video.
   2. A selection window lets you tick exactly which items to export
@@ -69,14 +75,23 @@ def _parse_date(s):
 # --------------------------------------------------------------------------- #
 
 async def detect_device():
-    """Return 'disconnected' | 'locked' | 'untrusted' | ('trusted', name)."""
-    from pymobiledevice3.usbmux import list_devices
+    """Return ('disconnected'|'locked'|'untrusted'|'afc_unavailable', None)
+    or ('trusted', name).
+
+    'afc_unavailable' means usbmuxd (the Apple driver) couldn't be reached at
+    all — the caller should fall back to MTP.
+    """
     from pymobiledevice3.lockdown import create_using_usbmux
     from pymobiledevice3.exceptions import (
         NotTrustedError, NotPairedError, PairingDialogResponsePendingError,
         UserDeniedPairingError, PasswordRequiredError, PasscodeRequiredError,
     )
-    devices = await list_devices()
+    try:
+        from pymobiledevice3.usbmux import list_devices
+        devices = await list_devices()
+    except Exception:
+        # Couldn't even open the usbmuxd socket -> no Apple driver/service.
+        return ("afc_unavailable", None)
     if not devices:
         return ("disconnected", None)
     try:
@@ -248,6 +263,226 @@ async def copy_records_worker(opts, records, missing, emit, cancel):
 
 def run_async(coro_factory):
     asyncio.run(coro_factory())
+
+
+# --------------------------------------------------------------------------- #
+# MTP backend (no Apple driver). Used automatically when usbmuxd is unreachable.
+# Windows-only; drives the same channel File Explorer uses, through Shell COM.
+# COM apartments are thread-bound, so each worker initializes COM itself and
+# re-resolves device folders by path instead of sharing COM objects across
+# threads. Records mirror the AFC shape (rel/size/mtime) plus reldir/name so the
+# export pass can navigate straight back to each file.
+# --------------------------------------------------------------------------- #
+
+def _mtp_detect():
+    """('mtp_ready', name) if an iPhone is visible under 'This PC',
+    else ('disconnected', None)."""
+    if os.name != "nt":
+        return ("disconnected", None)
+    try:
+        import pythoncom
+        import win32com.client
+        import iphone_export_mtp as mtp
+    except Exception:
+        return ("disconnected", None)
+    pythoncom.CoInitialize()
+    try:
+        shell = win32com.client.Dispatch("Shell.Application")
+        phone = mtp.find_iphone(shell, None)
+        return ("mtp_ready", phone.Name) if phone else ("disconnected", None)
+    except Exception:
+        return ("disconnected", None)
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _mtp_navigate(start_folder, reldir, mtp):
+    """Descend from start_folder through a relative dir like '105APPLE'."""
+    folder = start_folder
+    for part in (reldir or "").replace("\\", "/").split("/"):
+        if not part:
+            continue
+        child = mtp.find_child(folder, part)
+        if child is None:
+            return None
+        folder = child.GetFolder
+    return folder
+
+
+def _mtp_post_convert(final_path, mtime, convert, have_ffmpeg):
+    """Mirror core.copy_file's optional HEIC->JPG / MOV->MP4 conversion on a
+    freshly-copied original. No-op when convert is off."""
+    if not convert:
+        return
+    ext = os.path.splitext(final_path)[1].lower()
+    if ext in (".heic", ".heif"):
+        jpg = os.path.splitext(final_path)[0] + ".jpg"
+        core.convert_heic_to_jpg(final_path, jpg)
+        core.set_mtime(jpg, mtime)
+        os.remove(final_path)
+    elif ext == ".mov" and have_ffmpeg:
+        mp4 = os.path.splitext(final_path)[0] + ".mp4"
+        core.convert_mov_to_mp4(final_path, mp4)
+        core.set_mtime(mp4, mtime)
+        os.remove(final_path)
+
+
+def mtp_scan_worker(opts, emit, cancel):
+    import pythoncom
+    import win32com.client
+    import iphone_export_mtp as mtp
+    pythoncom.CoInitialize()
+    try:
+        emit("status", "connecting", "Scanning iPhone (MTP — no Apple driver)…")
+        shell = win32com.client.Dispatch("Shell.Application")
+        phone = mtp.find_iphone(shell, None)
+        if phone is None:
+            emit("error", "iPhone not found under 'This PC'. Unlock it, tap "
+                          "Trust, and confirm it shows in File Explorer.")
+            emit("finished", None)
+            return
+        emit("log", f"Connected to {phone.Name} (MTP).")
+        start = mtp.get_start_folder(phone, full=False)
+        if start is None:
+            emit("error", "Could not open the iPhone's storage. Unlock and retry.")
+            emit("finished", None)
+            return
+
+        records = []
+
+        def walk(folder, reldir):
+            for item in mtp.items_with_retry(folder):
+                if cancel.is_set():
+                    return
+                if item.IsFolder:
+                    sub = posixpath.join(reldir, item.Name) if reldir else item.Name
+                    walk(item.GetFolder, sub)
+                    continue
+                fname = mtp.get_name(item)
+                if not mtp.is_media(fname):
+                    continue
+                size = mtp.get_prop(item, "System.Size")
+                try:
+                    size = int(size) if size is not None else 0
+                except (TypeError, ValueError):
+                    size = 0
+                rel = posixpath.join(reldir, fname) if reldir else fname
+                records.append({
+                    "rel": rel, "reldir": reldir, "name": fname,
+                    "size": size, "mtime": mtp.get_mtime(item),
+                })
+                if len(records) % 200 == 0:
+                    emit("log", f"   …{len(records)} files found")
+
+        emit("log", "Scanning the iPhone (this can take a minute)…")
+        walk(start, "")
+        records.sort(key=lambda r: _ts(r["mtime"]), reverse=True)
+        if not records:
+            emit("log", "0 files found — keep the iPhone unlocked and tap "
+                        "Allow/Trust on it, then Refresh and try again.")
+        else:
+            emit("log", f"Found {len(records)} items.")
+        emit("records", records, [])
+        emit("finished", None)
+    except Exception as e:
+        emit("error", f"MTP scan failed: {type(e).__name__}: {e}")
+        emit("finished", None)
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def mtp_copy_worker(opts, records, emit, cancel):
+    import pythoncom
+    import win32com.client
+    import iphone_export_mtp as mtp
+    from collections import defaultdict
+    pythoncom.CoInitialize()
+    try:
+        shell = win32com.client.Dispatch("Shell.Application")
+        phone = mtp.find_iphone(shell, None)
+        if phone is None:
+            emit("error", "iPhone not found. Keep it unlocked and connected.")
+            emit("finished", None)
+            return
+        start = mtp.get_start_folder(phone, full=False)
+        if start is None:
+            emit("error", "Could not open the iPhone's storage.")
+            emit("finished", None)
+            return
+
+        dest = opts["dest"]
+        staging = os.path.join(dest, ".staging")
+        os.makedirs(staging, exist_ok=True)
+        convert = opts["convert"]
+        have_ffmpeg = opts["ffmpeg"]
+        if convert:
+            try:
+                core.ensure_heif()
+            except SystemExit:
+                convert = False
+
+        total = len(records)
+        emit("phase", f"Exporting {total} files…")
+        emit("progress", 0, total)
+
+        by_dir = defaultdict(list)
+        for r in records:
+            by_dir[r["reldir"]].append(r)
+
+        copied = skipped = failed = done = 0
+        failures = []
+        for reldir, recs in by_dir.items():
+            if cancel.is_set():
+                emit("log", "Cancelled by user.")
+                break
+            folder = _mtp_navigate(start, reldir, mtp)
+            items_by_name = {}
+            if folder is not None:
+                for it in mtp.items_with_retry(folder):
+                    items_by_name[mtp.get_name(it)] = it
+            for r in recs:
+                if cancel.is_set():
+                    break
+                done += 1
+                final_path = os.path.join(dest, r["rel"].replace("/", os.sep))
+                try:
+                    item = items_by_name.get(r["name"])
+                    if item is None:
+                        raise FileNotFoundError("file no longer on device")
+                    result = mtp.copy_one(shell, item, r["size"] or None,
+                                          r["mtime"], staging, final_path,
+                                          opts.get("timeout", 3600))
+                    if result == "copied":
+                        _mtp_post_convert(final_path, r["mtime"], convert, have_ffmpeg)
+                        copied += 1
+                        emit("log", f"✓ {r['rel']}")
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    failed += 1
+                    failures.append((r["rel"], f"{type(e).__name__}: {e}",
+                                     traceback.format_exc()))
+                    emit("log", f"✗ FAILED {r['rel']} — {type(e).__name__}: {e}")
+                emit("progress", done, total)
+
+        try:
+            os.rmdir(staging)
+        except OSError:
+            pass
+        if failures:
+            with open(os.path.join(dest, "failures.txt"), "w",
+                      encoding="utf-8") as f:
+                f.write(f"# {len(failures)} failure(s) — {datetime.now().isoformat()}\n\n")
+                for path, short, tb in failures:
+                    f.write(f"{path}\n    {short}\n{tb}\n")
+        emit("summary", {"copied": copied, "skipped": skipped, "failed": failed,
+                         "missing": 0, "dest": dest})
+        emit("finished", None)
+    except Exception as e:
+        emit("error", f"MTP export failed: {type(e).__name__}: {e}")
+        emit("finished", None)
+    finally:
+        pythoncom.CoUninitialize()
 
 
 # --------------------------------------------------------------------------- #
@@ -429,6 +664,7 @@ class ExporterApp:
         self.cancel = threading.Event()
         self.scan_opts = {}
         self.pending_missing = []
+        self.backend = "afc"   # flips to "mtp" when the Apple driver is absent
 
         self._build_ui()
         self._set_status("connecting", "Checking for iPhone…")
@@ -511,7 +747,13 @@ class ExporterApp:
             try:
                 state = asyncio.run(detect_device())
             except Exception:
-                state = ("disconnected", None)
+                state = ("afc_unavailable", None)
+            if state[0] in ("afc_unavailable", "disconnected"):
+                # AFC gave us nothing usable (no Apple driver, or the phone is
+                # only visible over MTP). Try the no-Apple-software MTP path;
+                # if that finds the phone we use it, otherwise it's truly absent.
+                mtp_state = _mtp_detect()
+                state = mtp_state if mtp_state[0] == "mtp_ready" else ("disconnected", None)
             self.events.put(("detect", state))
 
         threading.Thread(target=work, daemon=True).start()
@@ -539,9 +781,15 @@ class ExporterApp:
         if convert and not have_ffmpeg:
             self._append_log("Note: ffmpeg not found — videos kept as .MOV.")
 
+        library = self.lib_var.get()
+        if self.backend == "mtp" and library:
+            self._append_log("Note: full-library mode needs the Apple driver; "
+                             "scanning DCIM over MTP instead.")
+            library = False
+
         self.scan_opts = {"dest": os.path.abspath(dest), "convert": convert,
                           "ffmpeg": have_ffmpeg, "skip_existing": self.skip_var.get(),
-                          "library": self.lib_var.get()}
+                          "library": library, "backend": self.backend}
 
         self.cancel.clear()
         self.start_btn.config(state="disabled")
@@ -550,9 +798,12 @@ class ExporterApp:
         self.prog_lbl.config(text="Scanning…")
         self._append_log("──────── scanning device ────────")
 
-        threading.Thread(target=run_async,
-                         args=(lambda: scan_worker(self.scan_opts, self._emit, self.cancel),),
-                         daemon=True).start()
+        if self.backend == "mtp":
+            target = (lambda: mtp_scan_worker(self.scan_opts, self._emit, self.cancel))
+        else:
+            target = (lambda: run_async(
+                lambda: scan_worker(self.scan_opts, self._emit, self.cancel)))
+        threading.Thread(target=target, daemon=True).start()
 
     # --- phase 2: export the chosen items ---
     def begin_export(self, selected):
@@ -562,11 +813,14 @@ class ExporterApp:
         self.prog.config(value=0)
         self.prog_lbl.config(text="Starting…")
         self._append_log(f"──────── exporting {len(selected)} selected items ────────")
-        threading.Thread(
-            target=run_async,
-            args=(lambda: copy_records_worker(self.scan_opts, selected,
-                                              self.pending_missing, self._emit, self.cancel),),
-            daemon=True).start()
+        if self.scan_opts.get("backend") == "mtp":
+            target = (lambda: mtp_copy_worker(self.scan_opts, selected,
+                                              self._emit, self.cancel))
+        else:
+            target = (lambda: run_async(
+                lambda: copy_records_worker(self.scan_opts, selected,
+                                            self.pending_missing, self._emit, self.cancel)))
+        threading.Thread(target=target, daemon=True).start()
 
     def do_cancel(self):
         self.cancel.set()
@@ -593,8 +847,15 @@ class ExporterApp:
                    "locked": ("locked", "iPhone connected but locked — unlock it."),
                    "untrusted": ("untrusted", "iPhone connected — tap “Trust”, then Refresh.")}
             if state == "trusted":
+                self.backend = "afc"
                 self._set_status("trusted", f"Connected & trusted — {name}")
+            elif state == "mtp_ready":
+                self.backend = "mtp"
+                self._set_status("trusted",
+                                 f"Connected — {name}  ·  MTP mode (no Apple driver)")
             else:
+                if state in ("locked", "untrusted"):
+                    self.backend = "afc"
                 self._set_status(*msg.get(state, ("disconnected", "No iPhone.")))
         elif kind == "status":
             self._set_status(payload[0], payload[1])

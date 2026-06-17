@@ -1,0 +1,4 @@
+# For the no-Apple-software MTP path (iphone_export_mtp.py, and the GUI's
+# automatic fallback when the Apple driver isn't installed). Windows only.
+pywin32>=306
+tqdm>=4.66.0

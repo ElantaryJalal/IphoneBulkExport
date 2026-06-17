@@ -49,7 +49,7 @@ if errorlevel 1 goto :err
 echo.
 echo === Installing ONLY the needed packages ===
 "%PY%" -m pip install --upgrade pip setuptools wheel
-"%PY%" -m pip install pymobiledevice3 pillow pillow-heif pyinstaller
+"%PY%" -m pip install pymobiledevice3 pillow pillow-heif pyinstaller pywin32
 if errorlevel 1 goto :err
 
 echo.
@@ -76,23 +76,20 @@ if exist "%FFMPEG%" (
 )
 
 echo.
-echo === Locating base-interpreter DLLs (tkinter / sqlite3 / ssl) ===
-REM This venv is created from Anaconda's Python, so _tkinter.pyd and _sqlite3.pyd
-REM come from <anaconda>\DLLs but their companion DLLs (tcl86t.dll, tk86t.dll,
-REM sqlite3.dll, libssl, liblzma, ...) live in <anaconda>\Library\bin. That dir
-REM isn't on PATH during the build, so PyInstaller can't resolve/bundle them and
-REM the packaged exe would crash on GUI start / database read. Put them on PATH.
-for /f "delims=" %%B in ('"%PY%" -c "import sys;print(sys.base_prefix)"') do set "BASEPREFIX=%%B"
-echo Base interpreter prefix: %BASEPREFIX%
-set "PATH=%BASEPREFIX%\Library\bin;%BASEPREFIX%\DLLs;%PATH%"
-
-echo.
 echo === Building one-file windowed exe ===
+REM Built from a clean python.org venv: _ctypes/_ssl/_tkinter/_sqlite3 and their
+REM companion DLLs live in the standard layout, so PyInstaller resolves them
+REM automatically (no Anaconda Library\bin PATH hack needed).
+REM pywin32 (win32com/pythoncom) is bundled for the GUI's MTP fallback path.
 "%PY%" -m PyInstaller --noconfirm --onefile --windowed --name iPhoneExporter ^
   --add-binary "%FFMPEG%;." ^
   --collect-all pymobiledevice3 ^
   --collect-all pillow_heif ^
   --collect-all construct ^
+  --hidden-import iphone_export_mtp ^
+  --hidden-import win32com.client ^
+  --hidden-import win32timezone ^
+  --collect-submodules win32com ^
   --exclude-module PyQt5 --exclude-module PyQt6 ^
   --exclude-module PySide2 --exclude-module PySide6 ^
   --exclude-module matplotlib --exclude-module scipy --exclude-module pandas ^

@@ -16,34 +16,48 @@ You ship **two things**:
 
 ---
 
-## Step 1 — Build the .exe (on Windows)
+## Step 1 — Build the installer (on Windows)
 
-In the project folder (where `iphone_export_gui.py` lives):
+You ship a single **installer** (`iPhoneExporterSetup.exe`) that installs the app
+**and** silently sets up the Apple Mobile Device USB driver (via winget) so the
+fast AFC path works on first launch. If that driver step can't run, the app falls
+back to MTP (Windows' built-in iPhone connection) — so it still works with no
+Apple software at all.
+
+**1a. Build the one-file exe** — must be built from a **python.org** Python, not
+Anaconda (conda's DLL layout makes the packaged exe crash with `_ctypes` errors):
 
 ```powershell
-.\build_exe.bat
+.\build_venv.bat
 ```
 
-Result: **`dist\iPhoneExporter.exe`** (one double-clickable file). First launch is
-a bit slow (it unpacks to a temp dir); that's normal for one-file builds.
+Result: **`dist\iPhoneExporter.exe`**. ffmpeg **is** bundled inside it (MOV→MP4
+works out of the box); HEIC→JPG works too (pillow-heif bundled).
 
-> ffmpeg is **not** bundled. For MOV→MP4 in the packaged app, drop `ffmpeg.exe`
-> next to `iPhoneExporter.exe`, or tell users to install ffmpeg. HEIC→JPG works
-> out of the box (pillow-heif is bundled).
+**1b. Compile the installer** with Inno Setup (`winget install JRSoftware.InnoSetup`
+if you don't have it), from the project root:
 
-Test the .exe on a clean-ish machine if you can, since SmartScreen will flag an
-unsigned binary (users click **More info → Run anyway** — this is covered in the
-website FAQ).
+```powershell
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
+```
 
-## Step 2 — Put the app on GitHub Releases
+Result: **`dist\iPhoneExporterSetup.exe`** — this is what you upload and what the
+website links to.
 
-1. Create a GitHub repo and push the project (the `.py` files + `website/`).
+Test the installer on a clean-ish machine if you can. SmartScreen flags the
+unsigned installer (users click **More info → Run anyway** — covered in the
+website FAQ). The driver step needs internet + admin (UAC) on the user's machine.
+
+## Step 2 — Put the installer on GitHub Releases
+
+1. Create a GitHub repo and push the project (the `.py` files + `website/` +
+   `installer.iss` + `installer/`).
 2. On GitHub: **Releases → Draft a new release**.
-3. Tag it `v1.0`, give it a title, and **attach `iPhoneExporter.exe`** as a
+3. Tag it `v1.0`, give it a title, and **attach `iPhoneExporterSetup.exe`** as a
    release asset. Publish.
 4. Your permanent “always latest” download URL is:
    ```
-   https://github.com/YOUR_USER/YOUR_REPO/releases/latest/download/iPhoneExporter.exe
+   https://github.com/YOUR_USER/YOUR_REPO/releases/latest/download/iPhoneExporterSetup.exe
    ```
 
 ## Step 3 — Point the website at it
