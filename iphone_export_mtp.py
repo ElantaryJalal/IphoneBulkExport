@@ -48,6 +48,18 @@ def is_media(name):
     return os.path.splitext(name)[1].lower() in MEDIA_EXTENSIONS
 
 
+def _note(*args, **kwargs):
+    """print() that's a no-op when there's no console. The GUI imports this
+    module as a library inside a PyInstaller --windowed build, where sys.stdout
+    is None; on the CLI, stdout is real and this prints normally."""
+    if sys.stdout is None:
+        return
+    try:
+        print(*args, **kwargs)
+    except (OSError, ValueError):
+        pass
+
+
 def human(n):
     if n is None:
         return "?"
@@ -133,10 +145,10 @@ def find_iphone(shell, wanted):
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        print("Multiple Apple devices found:")
+        _note("Multiple Apple devices found:")
         for c in candidates:
-            print(f"  - {c.Name}")
-        print("Re-run with --device \"<part of the name>\" to pick one.")
+            _note(f"  - {c.Name}")
+        _note("Re-run with --device \"<part of the name>\" to pick one.")
         return candidates[0]
     return None
 
@@ -156,7 +168,7 @@ def get_start_folder(phone_item, full):
     dcim = find_child(storage_folder, "DCIM")
     if dcim:
         return dcim.GetFolder
-    print("No DCIM folder directly visible; scanning the whole device instead "
+    _note("No DCIM folder directly visible; scanning the whole device instead "
           "(only photos/videos are copied). Keep the phone unlocked.")
     return storage_folder
 

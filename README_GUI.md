@@ -5,17 +5,22 @@ It connects to an iPhone over USB and bulk-exports all photos & videos to a
 folder, with a live progress bar, a real-time log, and a connection/trust status
 light.
 
-![overview](docs-not-included) <!-- no image; described below -->
+It works **with or without Apple software**: it uses the fast **AFC** path when
+the Apple Mobile Device driver is present, and automatically falls back to
+**MTP** (Windows' built-in iPhone connection) when it isn't — see
+[README.md](README.md) for the engine details.
 
 **Main window**
 - A **status light** (red / orange / green) showing: not connected · connected
-  but locked or not trusted · connected & trusted (with the device name).
+  but locked or not trusted · connected & trusted (with the device name). When
+  the Apple driver is absent it shows **MTP mode** with the device name.
 - A **destination folder** picker.
 - A toggle: **Keep Originals (HEIC/MOV)** vs **Convert to JPG/MP4**.
 - **Skip already-transferred files (resume)** checkbox.
 - **Read full photo library** checkbox (the iMazing-style mode: reads
   `Photos.sqlite` for every asset + accurate dates, and reports iCloud-only
-  photos to `not_on_device.txt`).
+  photos to `not_on_device.txt`). This is **AFC-only**; in MTP mode it's ignored
+  and a DCIM scan is used instead.
 - **Scan & Choose…** / **Cancel** buttons, a **progress bar** (files / total),
   and a scrolling **log**.
 - On finish: a **summary** (copied / skipped / failed), and failures saved to
@@ -33,88 +38,58 @@ light.
   column toggles that row.
 - **Export selected** exports just the ticked items (with resume + conversion).
 
-The device I/O runs on a **background thread** with its own asyncio loop; the UI
-stays fully responsive and is updated through a thread-safe queue.
+The device I/O runs on a **background thread** (its own asyncio loop for AFC, or
+a per-thread COM apartment for MTP); the UI stays fully responsive and is updated
+through a thread-safe queue.
 
 ---
 
-## 1. Setup (Windows)
+## Run from source (Windows)
 
-1. **Apple USB driver** — install **iTunes** or **Apple Devices** from the
-   Microsoft Store (provides the driver pymobiledevice3 needs), then reboot.
-   Verify: `python -m pymobiledevice3 usbmux list` should list your iPhone.
-2. **Python 3.9+** (python.org, or your existing install).
-3. **Python packages** — install into the *same* interpreter you'll run with
-   (use `python -m pip` to be sure):
+1. **Python 3.9+** (python.org).
+2. Install the packages into the *same* interpreter you'll run with:
    ```powershell
-   python -m pip install pymobiledevice3 pillow pillow-heif
+   python -m pip install -r requirements.txt
    ```
-   - `pillow` + `pillow-heif` are only needed for **HEIC→JPG** conversion.
-   - tkinter ships with Python — nothing to install.
-4. **ffmpeg** (optional) — only for **MOV→MP4** conversion. You likely already
-   have it (`ffmpeg -version`). If not: `winget install Gyan.FFmpeg`, then reopen
-   the terminal. Without ffmpeg, videos are simply kept as `.MOV`.
+   `pillow` + `pillow-heif` are only needed for HEIC→JPG; `pywin32` powers the
+   MTP fallback (Windows). tkinter ships with Python.
+3. (Optional) For the fast AFC path + full-library mode, install the Apple
+   Mobile Device driver — `winget install Apple.AppleMobileDeviceSupport` (just
+   the driver, not iTunes). Without it, the GUI uses MTP automatically.
+4. Run it:
+   ```powershell
+   python iphone_export_gui.py
+   ```
 
-> Keep `iphone_export_gui.py` **next to `iphone_export.py`** — the GUI imports the
-> engine from it.
+Then: plug in the iPhone, **unlock it**, tap **Trust** if prompted, click
+**Refresh** until the light is green, pick a folder, choose your options, and
+**Scan & Choose…**. Keep the phone unlocked during scan and transfer (set
+Auto-Lock to Never for big libraries); if the connection drops, just run again —
+it resumes.
 
-## 2. Run it
+> Keep `iphone_export_gui.py` next to `iphone_export.py` and
+> `iphone_export_mtp.py` — the GUI imports both engines from them.
 
-```powershell
-cd C:\Users\user1\iphone-export
-python iphone_export_gui.py
-```
+## Packaging & distribution
 
-Then:
-1. Plug in the iPhone, **unlock it**, tap **Trust** if prompted, click **Refresh**
-   until the light is green.
-2. Pick a destination folder.
-3. Choose Keep Originals or Convert, tick the options you want, click
-   **Scan & Choose…**.
-4. In the selection window, filter/tick the items you want and click
-   **Export selected**.
-5. Keep the phone **unlocked** during scan and transfer (set Auto-Lock to Never
-   for big libraries). If the connection drops, just run it again — it resumes.
+Don't package by hand — use the maintained build:
 
-## 3. Package as a standalone .exe (PyInstaller)
+- **`build_venv.bat`** builds `dist\iPhoneExporter.exe` from a clean python.org
+  venv (ffmpeg and pywin32 are bundled inside it).
+- **`installer.iss`** (Inno Setup) wraps that into `dist\iPhoneExporterSetup.exe`,
+  which also installs the Apple USB driver for the user automatically.
 
-```powershell
-python -m pip install pyinstaller
+Full release steps are in [DEPLOY.md](DEPLOY.md).
 
-pyinstaller --noconfirm --onefile --windowed --name iPhoneExporter ^
-  --collect-all pymobiledevice3 ^
-  --collect-submodules pymobiledevice3 ^
-  --collect-all pillow_heif ^
-  --collect-all construct ^
-  iphone_export_gui.py
-```
-
-(`^` is the PowerShell/CMD line-continuation; or put it all on one line.)
-
-- The result is `dist\iPhoneExporter.exe` — double-clickable, no Python needed.
-- `--collect-all pymobiledevice3` bundles its data files (plist/protocol
-  resources); `--collect-all pillow_heif` bundles the native HEIF decoder.
-  PyInstaller automatically pulls in `iphone_export.py` because the GUI imports
-  it.
-- **ffmpeg is NOT bundled.** For MOV→MP4 in the packaged app, either have ffmpeg
-  on the user's PATH, or drop `ffmpeg.exe` in the same folder as the .exe.
-- First launch of a one-file build is a little slow (it unpacks to a temp dir).
-  For faster startup use `--onedir` instead of `--onefile` (ships a folder).
-
-**If the .exe errors with a missing module** (some pymobiledevice3 deps import
-lazily), add it explicitly, e.g.:
-```
---collect-all bpylist2 --collect-all asn1 --hidden-import coloredlogs
-```
+> Build only from a **python.org** Python, never Anaconda — conda's DLL layout
+> makes the packaged exe crash with `_ctypes` errors.
 
 ---
 
 ## Notes
 - **iCloud-only photos** (with "Optimize iPhone Storage" on) aren't on the
-  device, so no USB tool can fetch them. They're listed in `not_on_device.txt`;
-  enable **Settings → Photos → Download and Keep Originals**, let it sync, then
-  run again.
+  device, so no USB tool can fetch them. In AFC full-library mode they're listed
+  in `not_on_device.txt`; enable **Settings → Photos → Download and Keep
+  Originals**, let it sync, then run again.
 - **HEIC previews**: install the free *HEIF Image Extensions* from the Store to
   view `.heic` in Windows Photos (or use the Convert option to get JPGs).
-- The CLI (`iphone_export.py`) has the same engine and now matching flags:
-  `--jpg`, `--keep-heic`, `--mp4`, `--keep-mov`, `--library`.
