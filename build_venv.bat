@@ -89,6 +89,8 @@ REM pywin32 (win32com/pythoncom) is bundled for the GUI's MTP fallback path.
   --hidden-import iphone_export_mtp ^
   --hidden-import win32com.client ^
   --hidden-import win32timezone ^
+  --hidden-import PIL.ImageTk ^
+  --hidden-import PIL._imagingtk ^
   --collect-submodules win32com ^
   --exclude-module PyQt5 --exclude-module PyQt6 ^
   --exclude-module PySide2 --exclude-module PySide6 ^

@@ -79,6 +79,59 @@ async def stream_remote(afc, remote, out, size):
         await afc.fclose(handle)
 
 
+async def read_remote_bytes(afc, remote, size):
+    """Read an entire device file into memory and return its bytes."""
+    handle = await afc.fopen(remote, "r")
+    buf = bytearray()
+    try:
+        remaining = size
+        while remaining > 0:
+            chunk = await afc.fread(handle, min(CHUNK_SIZE, remaining))
+            if not chunk:
+                break
+            buf += chunk
+            remaining -= len(chunk)
+    finally:
+        await afc.fclose(handle)
+    return bytes(buf)
+
+
+# iOS keeps the small JPEGs the Photos app shows in its grid (photo previews and
+# video poster frames) under a per-asset folder that mirrors the original's path.
+THUMB_CACHE_BASES = ("/PhotoData/Thumbnails/V2", "/PhotoData/Thumbnails")
+
+
+async def detect_thumb_cache(afc):
+    """Return the on-device thumbnail-cache base that exists, or None.
+    Probed once so we don't pay a failing lookup per asset when it's absent."""
+    for base in THUMB_CACHE_BASES:
+        if await afc_stat(afc, base):
+            return base
+    return None
+
+
+async def find_cached_thumb(afc, base, remote):
+    """Find iOS's pre-rendered preview for `remote` (an original's device path).
+    The cache stores one folder per asset (named after the original's full path)
+    holding rendered JPEGs; we pick the largest. Returns (path, size) or None.
+    This is the fast path that also gives video poster frames for free."""
+    folder = base + remote          # remote begins with '/'
+    try:
+        names = await afc.listdir(folder)
+    except Exception:
+        return None
+    best, best_size = None, -1
+    for name in names:
+        if not name.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+        info = await afc_stat(afc, folder + "/" + name)
+        if info:
+            size = int(info.get("st_size", 0) or 0)
+            if size > best_size:
+                best, best_size = folder + "/" + name, size
+    return (best, best_size) if best else None
+
+
 # --------------------------------------------------------------------------- #
 # Mode 1: plain folder walk (default)
 # --------------------------------------------------------------------------- #
@@ -253,6 +306,75 @@ def ensure_heif():
     except ImportError:
         sys.exit("--jpg needs Pillow + pillow-heif for HEIC conversion.\n"
                  "Install them with:  python -m pip install pillow pillow-heif")
+
+
+def try_register_heif():
+    """Register HEIF support if available. Returns True on success, False if
+    pillow-heif isn't installed (caller decides how to degrade — no exit)."""
+    global _heif_ready
+    if _heif_ready:
+        return True
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+        _heif_ready = True
+        return True
+    except Exception:
+        return False
+
+
+def _is_heif(data):
+    """Cheap brand sniff for HEIC/HEIF containers (ISO-BMFF 'ftyp' box)."""
+    return len(data) >= 24 and data[4:8] == b"ftyp" and any(
+        b in data[8:32] for b in (b"heic", b"heix", b"heif", b"mif1", b"msf1"))
+
+
+def _open_preview(data, box):
+    """Open image bytes as a PIL image, decoding as little as possible:
+      * HEIC/HEIF — decode the container's embedded thumbnail when present
+        (skips decoding the full-resolution image entirely).
+      * JPEG — use draft() to decode at a reduced resolution.
+    Falls back to a normal full decode for anything else."""
+    import io
+    from PIL import Image
+
+    if _is_heif(data):
+        try:
+            import pillow_heif
+            heif = pillow_heif.open_heif(data, convert_hdr_to_8bit=True)
+            img = heif[0]
+            thumbs = sorted((getattr(img, "thumbnails", None) or []),
+                            key=lambda t: min(t.size))
+            pick = next((t for t in thumbs if min(t.size) >= min(box)),
+                        thumbs[-1] if thumbs else None)
+            return (pick or img).to_pillow()
+        except Exception:
+            pass  # fall through to the generic decoder below
+
+    im = Image.open(io.BytesIO(data))
+    if im.format == "JPEG":
+        try:
+            im.draft("RGB", box)   # decoder downscales by 1/2..1/8 while reading
+        except Exception:
+            pass
+    im.load()
+    return im
+
+
+def make_thumbnail(data, dest_path, box=(160, 160)):
+    """Decode image bytes (cheaply — see _open_preview), downscale to fit `box`,
+    and save a PNG at dest_path. Honors EXIF orientation. Writes atomically.
+    Raises on undecodable input."""
+    from PIL import ImageOps
+    try_register_heif()
+    im = _open_preview(data, box)
+    im = ImageOps.exif_transpose(im)
+    im.thumbnail(box)
+    if im.mode not in ("RGB", "RGBA", "L"):
+        im = im.convert("RGB")
+    tmp = dest_path + ".part"
+    im.save(tmp, "PNG")
+    os.replace(tmp, dest_path)
 
 
 def convert_heic_to_jpg(src_path, jpg_path, quality=90):

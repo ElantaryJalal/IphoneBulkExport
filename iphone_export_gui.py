@@ -25,6 +25,7 @@ Deps:   python -m pip install pymobiledevice3 pillow pillow-heif
 """
 
 import asyncio
+import hashlib
 import os
 import posixpath
 import queue
@@ -486,64 +487,240 @@ def mtp_copy_worker(opts, records, emit, cancel):
 
 
 # --------------------------------------------------------------------------- #
-# Selection window (main thread). A checkable table of every item.
+# Thumbnail service (AFC). A background thread holds one live AFC connection and
+# turns photo records into small PNG thumbnails on demand. Requests are served
+# newest-first (LIFO) so fast scrolling prioritizes what's currently on screen;
+# thumbnails are cached to a temp dir keyed by path+size+mtime, so re-scrolling
+# (and re-runs) never re-fetch. Only the main thread touches widgets — results
+# are handed back through a thread-safe queue.
+# --------------------------------------------------------------------------- #
+
+class ThumbnailService:
+    THUMB_BOX = (256, 256)     # master size; tiles scale down from this
+    CONCURRENCY = 4            # parallel AFC connections (one socket is serial)
+    MAX_QUEUE = 400            # drop the oldest pending when scrolling far/fast
+
+    def __init__(self):
+        self.cache_dir = os.path.join(tempfile.gettempdir(),
+                                      "iphone_export_thumbs")
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.results = queue.Queue()           # (remote, png_path | None)
+        self._lock = threading.Lock()
+        self._stack = []                       # LIFO of (remote, size, mtime)
+        self._pending = set()                  # remotes queued or in flight
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._started = False
+
+    def start(self):
+        if not self._started:
+            self._started = True
+            self._thread.start()
+
+    def shutdown(self):
+        self._stop.set()
+
+    def cached_path(self, remote, size, mtime):
+        key = hashlib.md5(f"{remote}|{size}|{_ts(mtime)}".encode()).hexdigest()
+        return os.path.join(self.cache_dir, key + ".png")
+
+    def request(self, remote, size, mtime, is_video=False):
+        """Queue a thumbnail fetch. No-op if it's already cached or in flight."""
+        with self._lock:
+            if remote in self._pending:
+                return
+            self._pending.add(remote)
+            self._stack.append((remote, size, mtime, is_video))
+            # Bound the backlog so a long fast scroll doesn't pile up stale work.
+            while len(self._stack) > self.MAX_QUEUE:
+                old = self._stack.pop(0)
+                self._pending.discard(old[0])
+
+    def _next(self):
+        with self._lock:
+            return self._stack.pop() if self._stack else None
+
+    def _run(self):
+        try:
+            asyncio.run(self._serve())
+        except Exception:
+            pass
+
+    async def _serve(self):
+        # Each worker owns its own AFC connection so transfers run in parallel
+        # (a single AFC socket is strictly request/response).
+        workers = [asyncio.create_task(self._worker())
+                   for _ in range(self.CONCURRENCY)]
+        await asyncio.gather(*workers, return_exceptions=True)
+
+    async def _worker(self):
+        from pymobiledevice3.lockdown import create_using_usbmux
+        from pymobiledevice3.services.afc import AfcService
+        try:
+            lockdown = await create_using_usbmux()
+        except Exception:
+            return
+        try:
+            async with AfcService(lockdown=lockdown) as afc:
+                # iOS's pre-rendered preview cache (fast path; gives video posters).
+                cache_base = await core.detect_thumb_cache(afc)
+                while not self._stop.is_set():
+                    req = self._next()
+                    if req is None:
+                        await asyncio.sleep(0.05)
+                        continue
+                    remote, size, mtime, is_video = req
+                    path = self.cached_path(remote, size, mtime)
+                    try:
+                        if not os.path.exists(path):
+                            await self._build(afc, cache_base, remote, size,
+                                              is_video, path)
+                        self.results.put((remote, path))
+                    except Exception:
+                        self.results.put((remote, None))
+                    finally:
+                        with self._lock:
+                            self._pending.discard(remote)
+        except Exception:
+            return
+
+    async def _build(self, afc, cache_base, remote, size, is_video, path):
+        """Produce one thumbnail PNG at `path`. Prefers iOS's pre-rendered
+        preview (tiny, and the only cheap source for video); for photos, falls
+        back to decoding the original. Videos with no cached poster are skipped."""
+        if cache_base:
+            found = await core.find_cached_thumb(afc, cache_base, remote)
+            if found:
+                tremote, tsize = found
+                data = await core.read_remote_bytes(afc, tremote, tsize)
+                await asyncio.to_thread(core.make_thumbnail, data, path,
+                                        self.THUMB_BOX)
+                return
+        if is_video:
+            raise RuntimeError("no cached poster for video")
+        data = await core.read_remote_bytes(afc, remote, size)
+        await asyncio.to_thread(core.make_thumbnail, data, path, self.THUMB_BOX)
+
+
+# --------------------------------------------------------------------------- #
+# Selection window (main thread). A lazy-loading thumbnail grid of every item.
 # --------------------------------------------------------------------------- #
 
 class SelectionWindow(tk.Toplevel):
-    CHECK, UNCHECK = "☑", "☐"
+    SIZES = {"Small": 112, "Medium": 152, "Large": 200}
+    PHOTO_CAP = 500             # max decoded PhotoImages kept in memory
 
-    def __init__(self, master, records, on_export):
+    # palette
+    BG = "#f4f5f7"
+    CARD = "#ffffff"
+    CARD_SEL = "#eaf2ff"
+    BORDER = "#e2e5ea"
+    BORDER_HOVER = "#b7c4d6"
+    ACCENT = "#2f6fdb"
+    VIDEO_BG = "#2b2f36"
+    NAME_FG = "#555555"
+
+    def __init__(self, master, records, on_export, thumbs=None):
         super().__init__(master)
         self.title("Choose items to export")
-        self.geometry("780x600")
+        self.geometry("1000x720")
+        self.minsize(560, 480)
+        self.configure(bg=self.BG)
         self.records = records
         self.on_export = on_export
-        self.checked = set(range(len(records)))   # indices ticked; default all
+        self.thumbs = thumbs                       # ThumbnailService or None
+        self.checked = set(range(len(records)))    # record indices ticked
+        self.view = list(range(len(records)))      # record indices after filter
+        self.photo = {}                            # idx -> PhotoImage (LRU-ish)
+        self.failed = set()                        # idx with no usable preview
+        self.cols = 1
+        self.hover = None                          # idx under the cursor
+        self.anchor = None                         # view-pos for shift-range
+        self._last_w = 0
+        self._content_h = 1
+        self._alive = True
+        self.remote_to_idx = {r["remote"]: i for i, r in enumerate(records)
+                              if r.get("remote")}
+
+        # tile geometry (recomputed when the size selector changes)
+        self.ip = 8                                # inner pad around the image
+        self.label_h = 24                          # filename strip
+        self.gap = 14                              # space between cards
+        self.thumb = self.SIZES["Medium"]
+        self._recompute_dims()
 
         self._build()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Control-a>", lambda _e: self._bulk(True))
+        self.bind("<Control-A>", lambda _e: self._bulk(True))
+        if self.thumbs is not None:
+            self.thumbs.start()
+            self.after(120, self._drain_thumbs)
         self._apply_filter()
 
+    def _recompute_dims(self):
+        self.card_w = self.thumb + 2 * self.ip
+        self.card_h = self.thumb + 2 * self.ip + self.label_h
+        self.cell_w = self.card_w + self.gap
+        self.cell_h = self.card_h + self.gap
+        self.margin = self.gap
+
     def _build(self):
-        # Filter bar
+        # Filter / toolbar
         bar = ttk.Frame(self)
-        bar.pack(fill="x", padx=10, pady=8)
+        bar.pack(fill="x", padx=12, pady=(10, 4))
         ttk.Label(bar, text="From").pack(side="left")
         self.from_var = tk.StringVar()
-        ttk.Entry(bar, textvariable=self.from_var, width=12).pack(side="left", padx=(2, 8))
+        ttk.Entry(bar, textvariable=self.from_var, width=11).pack(side="left", padx=(2, 6))
         ttk.Label(bar, text="To").pack(side="left")
         self.to_var = tk.StringVar()
-        ttk.Entry(bar, textvariable=self.to_var, width=12).pack(side="left", padx=(2, 8))
+        ttk.Entry(bar, textvariable=self.to_var, width=11).pack(side="left", padx=(2, 6))
         ttk.Label(bar, text="(YYYY-MM-DD)").pack(side="left", padx=(0, 10))
         ttk.Label(bar, text="Type").pack(side="left")
         self.type_var = tk.StringVar(value="All")
-        ttk.Combobox(bar, textvariable=self.type_var, width=8, state="readonly",
-                     values=["All", "Photos", "Videos"]).pack(side="left", padx=4)
+        cb = ttk.Combobox(bar, textvariable=self.type_var, width=8, state="readonly",
+                          values=["All", "Photos", "Videos"])
+        cb.pack(side="left", padx=4)
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._apply_filter())
         ttk.Label(bar, text="Name").pack(side="left", padx=(8, 0))
         self.search_var = tk.StringVar()
-        ttk.Entry(bar, textvariable=self.search_var, width=14).pack(side="left", padx=4)
-        ttk.Button(bar, text="Apply filter", command=self._apply_filter).pack(side="left", padx=6)
+        ent = ttk.Entry(bar, textvariable=self.search_var, width=14)
+        ent.pack(side="left", padx=4)
+        ent.bind("<Return>", lambda _e: self._apply_filter())
+        ttk.Button(bar, text="Apply", command=self._apply_filter).pack(side="left", padx=6)
         ttk.Button(bar, text="Reset", command=self._reset_filter).pack(side="left")
 
-        # Table
+        # Size selector (right side)
+        self.size_var = tk.StringVar(value="Medium")
+        size_cb = ttk.Combobox(bar, textvariable=self.size_var, width=8,
+                               state="readonly", values=list(self.SIZES))
+        size_cb.pack(side="right")
+        size_cb.bind("<<ComboboxSelected>>", self._on_size_change)
+        ttk.Label(bar, text="Size").pack(side="right", padx=(0, 4))
+
+        ttk.Label(self, text="Click a tile to select · Shift-click for a range · "
+                             "Ctrl+A selects all shown",
+                  foreground="#8a8f98").pack(anchor="w", padx=14, pady=(0, 4))
+
+        # Thumbnail grid (virtualized canvas — only visible tiles are drawn)
         wrap = ttk.Frame(self)
-        wrap.pack(fill="both", expand=True, padx=10)
-        cols = ("chk", "name", "date", "type", "size")
-        self.tree = ttk.Treeview(wrap, columns=cols, show="headings", selectmode="extended")
-        for c, txt, w, anchor in (("chk", "", 36, "center"), ("name", "Name", 320, "w"),
-                                  ("date", "Date", 150, "w"), ("type", "Type", 70, "center"),
-                                  ("size", "Size", 90, "e")):
-            self.tree.heading(c, text=txt)
-            self.tree.column(c, width=w, anchor=anchor, stretch=(c == "name"))
-        vsb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
+        wrap.pack(fill="both", expand=True, padx=12)
+        self.canvas = tk.Canvas(wrap, bg=self.BG, highlightthickness=0)
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=self._yview)
+        self.canvas.configure(yscrollcommand=vsb.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
-        self.tree.bind("<Button-1>", self._on_click)
-        self.tree.bind("<space>", self._on_space)
+        self.canvas.bind("<Configure>", self._on_resize)
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", self._on_leave)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)        # Windows / macOS
+        self.canvas.bind("<Button-4>", self._on_wheel)          # Linux up
+        self.canvas.bind("<Button-5>", self._on_wheel)          # Linux down
 
         # Bottom controls
         ctrl = ttk.Frame(self)
-        ctrl.pack(fill="x", padx=10, pady=8)
+        ctrl.pack(fill="x", padx=12, pady=8)
         ttk.Button(ctrl, text="Select all (shown)", command=lambda: self._bulk(True)).pack(side="left")
         ttk.Button(ctrl, text="Deselect all (shown)", command=lambda: self._bulk(False)).pack(side="left", padx=6)
         self.count_lbl = ttk.Label(ctrl, text="")
@@ -551,7 +728,7 @@ class SelectionWindow(tk.Toplevel):
         self.export_btn = ttk.Button(ctrl, text="Export selected", command=self._export)
         self.export_btn.pack(side="right")
 
-    # --- filtering / populating ---
+    # --- filtering ---
     def _reset_filter(self):
         self.from_var.set(""); self.to_var.set("")
         self.type_var.set("All"); self.search_var.set("")
@@ -580,69 +757,262 @@ class SelectionWindow(tk.Toplevel):
         return True
 
     def _apply_filter(self):
-        self.tree.delete(*self.tree.get_children())
-        shown = 0
-        for idx, rec in enumerate(self.records):
-            if not self._matches(rec):
-                continue
-            name = os.path.basename(rec["rel"])
-            glyph = self.CHECK if idx in self.checked else self.UNCHECK
-            self.tree.insert("", "end", iid=str(idx),
-                             values=(glyph, name, _datestr(rec["mtime"]),
-                                     media_kind(name), core.human(rec["size"])))
-            shown += 1
-            if shown % 3000 == 0:
-                self.update_idletasks()
-        self._shown_count = shown
+        self.view = [i for i, rec in enumerate(self.records) if self._matches(rec)]
+        self.anchor = None
+        self.canvas.yview_moveto(0)
+        self._relayout()
         self._update_count()
 
-    # --- checkbox interaction ---
-    def _toggle(self, iid):
-        idx = int(iid)
-        if idx in self.checked:
-            self.checked.discard(idx)
-            self.tree.set(iid, "chk", self.UNCHECK)
+    def _on_size_change(self, _event=None):
+        self.thumb = self.SIZES.get(self.size_var.get(), self.SIZES["Medium"])
+        self.photo.clear()          # re-render from disk masters at the new size
+        self._recompute_dims()
+        self._relayout()
+
+    # --- virtualized grid ---
+    def _on_resize(self, event):
+        if event.width != self._last_w:
+            self._last_w = event.width
+            self._relayout()
+
+    def _yview(self, *args):
+        self.canvas.yview(*args)
+        self._redraw()
+
+    def _scroll_by(self, dy):
+        view_h = self.canvas.winfo_height()
+        total = max(self._content_h, view_h)
+        max_top = max(total - view_h, 0)
+        new = min(max(self.canvas.canvasy(0) + dy, 0), max_top)
+        self.canvas.yview_moveto(new / total if total else 0)
+        self._redraw()
+
+    def _on_wheel(self, event):
+        if getattr(event, "num", None) == 4:
+            step = -1
+        elif getattr(event, "num", None) == 5:
+            step = 1
         else:
-            self.checked.add(idx)
-            self.tree.set(iid, "chk", self.CHECK)
-        self._update_count()
-
-    def _on_click(self, event):
-        if self.tree.identify_region(event.x, event.y) != "cell":
-            return
-        if self.tree.identify_column(event.x) == "#1":  # the checkbox column
-            row = self.tree.identify_row(event.y)
-            if row:
-                self._toggle(row)
-                return "break"  # don't also change the row highlight
-
-    def _on_space(self, _event):
-        for iid in self.tree.selection():
-            self._toggle(iid)
+            step = -1 if event.delta > 0 else 1
+        self._scroll_by(step * self.cell_h)
         return "break"
 
-    def _bulk(self, select):
-        for iid in self.tree.get_children():
-            idx = int(iid)
-            if select:
-                self.checked.add(idx)
-                self.tree.set(iid, "chk", self.CHECK)
+    def _relayout(self):
+        w = max(self.canvas.winfo_width(), self.cell_w)
+        self.cols = max(1, (w - self.margin) // self.cell_w)
+        rows = (len(self.view) + self.cols - 1) // self.cols if self.view else 0
+        self._content_h = self.margin + rows * self.cell_h
+        self.canvas.configure(
+            scrollregion=(0, 0, self.margin + self.cols * self.cell_w,
+                          max(self._content_h, 1)))
+        self._redraw()
+
+    def _redraw(self):
+        c = self.canvas
+        c.delete("cell")
+        if not self.view:
+            return
+        top = c.canvasy(0)
+        height = c.winfo_height()
+        first_row = max(0, int((top - self.margin) // self.cell_h))
+        last_row = int((top + height - self.margin) // self.cell_h) + 1
+        visible = set()
+        for row in range(first_row, last_row + 1):
+            for col in range(self.cols):
+                pos = row * self.cols + col
+                if pos >= len(self.view):
+                    break
+                idx = self.view[pos]
+                visible.add(idx)
+                self._draw_cell(row, col, idx)
+        self._evict(visible)
+
+    def _load_photo(self, idx, master_path):
+        """Render a tk image from a cached master PNG, scaled to the tile size."""
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(master_path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((self.thumb, self.thumb))
+                ph = ImageTk.PhotoImage(im)
+        except Exception:
+            self.failed.add(idx)
+            return None
+        self.photo[idx] = ph
+        return ph
+
+    def _draw_cell(self, row, col, idx):
+        c = self.canvas
+        rec = self.records[idx]
+        name = os.path.basename(rec["rel"])
+        is_video = media_kind(name) == "Video"
+        selected = idx in self.checked
+        hovered = idx == self.hover
+
+        x0 = self.margin + col * self.cell_w
+        y0 = self.margin + row * self.cell_h
+        x1, y1 = x0 + self.card_w, y0 + self.card_h
+        ix0, iy0 = x0 + self.ip, y0 + self.ip
+        icx, icy = ix0 + self.thumb / 2, iy0 + self.thumb / 2
+
+        # card background
+        c.create_rectangle(x0, y0, x1, y1, fill=self.CARD_SEL if selected else self.CARD,
+                           outline="", tags="cell")
+
+        # image / placeholder
+        photo = self.photo.get(idx)
+        if (photo is None and idx not in self.failed
+                and self.thumbs is not None and rec.get("remote")):
+            cp = self.thumbs.cached_path(rec["remote"], rec["size"], rec["mtime"])
+            if os.path.exists(cp):
+                photo = self._load_photo(idx, cp)
             else:
+                self.thumbs.request(rec["remote"], rec["size"], rec["mtime"],
+                                    is_video)
+
+        if photo is not None:
+            c.create_image(icx, icy, image=photo, tags="cell")
+        else:
+            box = (ix0, iy0, ix0 + self.thumb, iy0 + self.thumb)
+            if is_video:
+                c.create_rectangle(*box, fill=self.VIDEO_BG, outline="", tags="cell")
+                r = max(12, self.thumb * 0.11)
+                c.create_polygon(icx - r * 0.5, icy - r, icx - r * 0.5, icy + r,
+                                 icx + r, icy, fill="#e9eaec", outline="", tags="cell")
+            else:
+                c.create_rectangle(*box, fill="#eef0f3", outline="", tags="cell")
+                if idx in self.failed or self.thumbs is None or not rec.get("remote"):
+                    label = "no preview"
+                else:
+                    label = "loading…"
+                c.create_text(icx, icy, text=label, fill="#9aa0a8",
+                              font=("Segoe UI", 9), tags="cell")
+
+        # border (selected > hover > default)
+        if selected:
+            bcol, bw = self.ACCENT, 2
+        elif hovered:
+            bcol, bw = self.BORDER_HOVER, 1
+        else:
+            bcol, bw = self.BORDER, 1
+        c.create_rectangle(x0, y0, x1, y1, outline=bcol, width=bw, tags="cell")
+
+        # selection badge (top-right); hollow ring on hover when unselected
+        bx, by, br = x1 - 16, y0 + 16, 11
+        if selected:
+            c.create_oval(bx - br, by - br, bx + br, by + br, fill=self.ACCENT,
+                          outline="white", width=2, tags="cell")
+            c.create_text(bx, by, text="✓", fill="white",
+                          font=("Segoe UI", 11, "bold"), tags="cell")
+        elif hovered:
+            c.create_oval(bx - br, by - br, bx + br, by + br, fill="#ffffff",
+                          outline=self.ACCENT, width=2, tags="cell")
+
+        # filename
+        c.create_text((x0 + x1) / 2, iy0 + self.thumb + self.label_h * 0.45,
+                      text=self._short(name), width=self.card_w - 8, anchor="center",
+                      fill=self.NAME_FG, font=("Segoe UI", 8), tags="cell")
+
+    def _short(self, name, n=24):
+        return name if len(name) <= n else name[:n - 9] + "…" + name[-8:]
+
+    def _evict(self, visible):
+        if len(self.photo) <= self.PHOTO_CAP:
+            return
+        for idx in list(self.photo.keys()):
+            if len(self.photo) <= self.PHOTO_CAP:
+                break
+            if idx not in visible:
+                del self.photo[idx]
+
+    def _pos_at(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        col = int((x - self.margin) // self.cell_w)
+        row = int((y - self.margin) // self.cell_h)
+        if col < 0 or col >= self.cols or row < 0:
+            return None
+        pos = row * self.cols + col
+        return pos if 0 <= pos < len(self.view) else None
+
+    # --- interaction ---
+    def _on_motion(self, event):
+        pos = self._pos_at(event)
+        idx = self.view[pos] if pos is not None else None
+        if idx != self.hover:
+            self.hover = idx
+            self._redraw()
+
+    def _on_leave(self, _event):
+        if self.hover is not None:
+            self.hover = None
+            self._redraw()
+
+    def _on_click(self, event):
+        pos = self._pos_at(event)
+        if pos is None:
+            return
+        shift = bool(event.state & 0x0001)
+        if shift and self.anchor is not None:
+            lo, hi = sorted((self.anchor, pos))
+            self.checked.update(self.view[lo:hi + 1])
+        else:
+            idx = self.view[pos]
+            if idx in self.checked:
                 self.checked.discard(idx)
-                self.tree.set(iid, "chk", self.UNCHECK)
+            else:
+                self.checked.add(idx)
+            self.anchor = pos
         self._update_count()
+        self._redraw()
+
+    def _bulk(self, select):
+        if select:
+            self.checked.update(self.view)
+        else:
+            self.checked.difference_update(self.view)
+        self._update_count()
+        self._redraw()
 
     def _update_count(self):
+        nbytes = sum(self.records[i]["size"] for i in self.checked)
         self.count_lbl.config(
-            text=f"{len(self.checked)} selected  ·  {self._shown_count} shown  "
-                 f"·  {len(self.records)} total")
+            text=f"{len(self.checked)} selected ({core.human(nbytes)})  ·  "
+                 f"{len(self.view)} shown  ·  {len(self.records)} total")
+
+    # --- thumbnail results pump ---
+    def _drain_thumbs(self):
+        if not self._alive:
+            return
+        changed = False
+        try:
+            while True:
+                remote, path = self.thumbs.results.get_nowait()
+                idx = self.remote_to_idx.get(remote)
+                if idx is None:
+                    continue
+                if not path:
+                    self.failed.add(idx)
+                changed = True       # _draw_cell loads the master lazily
+        except queue.Empty:
+            pass
+        if changed:
+            self._redraw()
+        self.after(120, self._drain_thumbs)
+
+    def destroy(self):
+        self._alive = False
+        if self.thumbs is not None:
+            self.thumbs.shutdown()
+            self.thumbs = None
+        super().destroy()
 
     def _export(self):
         selected = [self.records[i] for i in sorted(self.checked)]
         if not selected:
             self.count_lbl.config(text="Nothing selected — tick at least one item.")
             return
-        self.destroy()
+        self.destroy()          # closes the thumbnail AFC session first
         self.on_export(selected)
 
 
@@ -875,7 +1245,12 @@ class ExporterApp:
             if not records:
                 self._append_log("No items found to choose from.")
                 return
-            SelectionWindow(self.root, records, on_export=self.begin_export)
+            # Thumbnails only over AFC (live partial reads). MTP shows a
+            # name-only grid — pulling each file just to preview is too slow.
+            thumbs = (ThumbnailService()
+                      if self.scan_opts.get("backend") == "afc" else None)
+            SelectionWindow(self.root, records, on_export=self.begin_export,
+                            thumbs=thumbs)
         elif kind == "summary":
             s = payload
             msg = (f"Done. Copied {s['copied']}, skipped {s['skipped']}, "
