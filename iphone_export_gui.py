@@ -1021,14 +1021,27 @@ class SelectionWindow(tk.Toplevel):
 # --------------------------------------------------------------------------- #
 
 class ExporterApp:
-    DOT = {"disconnected": "#c0392b", "locked": "#e67e22",
-           "untrusted": "#e67e22", "connecting": "#2980b9", "trusted": "#27ae60"}
+    DOT = {"disconnected": "#e5484d", "locked": "#f5a623",
+           "untrusted": "#f5a623", "connecting": "#3b82f6", "trusted": "#22a06b"}
+    PILL = {"disconnected": "No device", "locked": "Locked",
+            "untrusted": "Trust needed", "connecting": "Connecting…",
+            "trusted": "Connected"}
+
+    # palette (matches the chooser window)
+    BG = "#f4f5f7"
+    CARD = "#ffffff"
+    BORDER = "#e2e5ea"
+    FG = "#23272f"
+    MUTED = "#7a818c"
+    ACCENT = "#2f6fdb"
+    ACCENT_HOVER = "#2861c4"
 
     def __init__(self, root):
         self.root = root
-        root.title("iPhone Photo & Video Exporter")
-        root.geometry("720x620")
-        root.minsize(640, 560)
+        root.title("iPhone Exporter")
+        root.geometry("760x680")
+        root.minsize(680, 600)
+        root.configure(bg=self.BG)
 
         self.events = queue.Queue()
         self.cancel = threading.Event()
@@ -1041,61 +1054,135 @@ class ExporterApp:
         self.detect()
         self.root.after(80, self._poll)
 
+    def _init_styles(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")          # clam lets us recolor flat widgets
+        except tk.TclError:
+            pass
+        style.configure(".", font=("Segoe UI", 10), background=self.CARD,
+                        foreground=self.FG)
+        style.configure("TEntry", fieldbackground="white", bordercolor=self.BORDER,
+                        lightcolor=self.BORDER, darkcolor=self.BORDER, padding=6)
+        style.configure("TCheckbutton", background=self.CARD, foreground=self.FG)
+        style.configure("TRadiobutton", background=self.CARD, foreground=self.FG)
+        style.map("TCheckbutton", background=[("active", self.CARD)])
+        style.map("TRadiobutton", background=[("active", self.CARD)])
+        # Buttons
+        style.configure("Accent.TButton", background=self.ACCENT, foreground="white",
+                        borderwidth=0, focusthickness=0, padding=(18, 9),
+                        font=("Segoe UI Semibold", 10))
+        style.map("Accent.TButton",
+                  background=[("disabled", "#aebfd9"), ("active", self.ACCENT_HOVER)])
+        style.configure("Ghost.TButton", background=self.CARD, foreground=self.FG,
+                        bordercolor=self.BORDER, borderwidth=1, padding=(12, 7))
+        style.map("Ghost.TButton",
+                  background=[("active", "#eef1f5"), ("disabled", self.CARD)],
+                  foreground=[("disabled", "#b3b9c2")])
+        style.configure("Accent.Horizontal.TProgressbar", troughcolor="#e7eaef",
+                        background=self.ACCENT, borderwidth=0, thickness=8)
+
+    def _card(self, parent):
+        return tk.Frame(parent, bg=self.CARD, highlightbackground=self.BORDER,
+                        highlightcolor=self.BORDER, highlightthickness=1, bd=0)
+
+    def _section(self, card, title):
+        tk.Label(card, text=title.upper(), bg=self.CARD, fg=self.MUTED,
+                 font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=16, pady=(13, 6))
+
     def _build_ui(self):
-        pad = {"padx": 10, "pady": 6}
+        self._init_styles()
 
-        status = ttk.Frame(self.root)
-        status.pack(fill="x", **pad)
-        self.dot = tk.Canvas(status, width=16, height=16, highlightthickness=0)
-        self.dot_id = self.dot.create_oval(2, 2, 14, 14, fill="#999", outline="")
-        self.dot.pack(side="left")
-        self.status_lbl = ttk.Label(status, text="…", font=("Segoe UI", 10, "bold"))
-        self.status_lbl.pack(side="left", padx=8)
-        ttk.Button(status, text="Refresh", command=self.detect).pack(side="right")
+        # Header: app/device identity + status pill + refresh
+        header = tk.Frame(self.root, bg=self.BG)
+        header.pack(fill="x", padx=24, pady=(20, 6))
+        tk.Label(header, text="📲", bg=self.BG,
+                 font=("Segoe UI Emoji", 24)).pack(side="left")
+        titles = tk.Frame(header, bg=self.BG)
+        titles.pack(side="left", padx=12)
+        self.device_lbl = tk.Label(titles, text="iPhone Exporter", bg=self.BG,
+                                   fg=self.FG, font=("Segoe UI Semibold", 16))
+        self.device_lbl.pack(anchor="w")
+        self.status_lbl = tk.Label(titles, text="Checking…", bg=self.BG,
+                                   fg=self.MUTED, font=("Segoe UI", 9))
+        self.status_lbl.pack(anchor="w")
+        ttk.Button(header, text="Refresh", style="Ghost.TButton",
+                   command=self.detect).pack(side="right")
+        self.status_pill = tk.Label(header, text="", bg="#999", fg="white",
+                                    font=("Segoe UI Semibold", 9), padx=11, pady=3)
+        self.status_pill.pack(side="right", padx=12)
 
-        dest = ttk.Frame(self.root)
-        dest.pack(fill="x", **pad)
-        ttk.Label(dest, text="Save to:").pack(side="left")
+        body = tk.Frame(self.root, bg=self.BG)
+        body.pack(fill="both", expand=True, padx=24, pady=(6, 18))
+
+        # Destination card
+        dest_card = self._card(body)
+        dest_card.pack(fill="x", pady=(6, 12))
+        self._section(dest_card, "Save to")
+        drow = tk.Frame(dest_card, bg=self.CARD)
+        drow.pack(fill="x", padx=16, pady=(0, 14))
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "iPhoneBackup"))
-        ttk.Entry(dest, textvariable=self.dest_var).pack(
-            side="left", fill="x", expand=True, padx=8)
-        ttk.Button(dest, text="Browse…", command=self.browse).pack(side="left")
+        ttk.Entry(drow, textvariable=self.dest_var).pack(
+            side="left", fill="x", expand=True)
+        ttk.Button(drow, text="Browse…", style="Ghost.TButton",
+                   command=self.browse).pack(side="left", padx=(8, 0))
 
-        opts = ttk.LabelFrame(self.root, text="Options")
-        opts.pack(fill="x", **pad)
+        # Options card
+        opt_card = self._card(body)
+        opt_card.pack(fill="x", pady=(0, 12))
+        self._section(opt_card, "Options")
+        og = tk.Frame(opt_card, bg=self.CARD)
+        og.pack(fill="x", padx=16, pady=(0, 12))
+        og.columnconfigure(0, weight=1)
+        og.columnconfigure(1, weight=1)
         self.mode = tk.StringVar(value="keep")
-        ttk.Radiobutton(opts, text="Keep Originals (HEIC / MOV)",
-                        variable=self.mode, value="keep").grid(row=0, column=0, sticky="w", padx=10, pady=4)
-        ttk.Radiobutton(opts, text="Convert to JPG / MP4",
-                        variable=self.mode, value="convert").grid(row=0, column=1, sticky="w", padx=10, pady=4)
+        ttk.Radiobutton(og, text="Keep originals (HEIC / MOV)", variable=self.mode,
+                        value="keep").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Radiobutton(og, text="Convert to JPG / MP4", variable=self.mode,
+                        value="convert").grid(row=0, column=1, sticky="w", pady=4)
         self.skip_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text="Skip already-transferred files (resume)",
-                        variable=self.skip_var).grid(row=1, column=0, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(og, text="Skip already-transferred files (resume)",
+                        variable=self.skip_var).grid(row=1, column=0, sticky="w", pady=4)
         self.lib_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text="Read full photo library (recommended)",
-                        variable=self.lib_var).grid(row=1, column=1, sticky="w", padx=10, pady=4)
+        ttk.Checkbutton(og, text="Read full photo library (recommended)",
+                        variable=self.lib_var).grid(row=1, column=1, sticky="w", pady=4)
 
-        ctrl = ttk.Frame(self.root)
-        ctrl.pack(fill="x", **pad)
-        self.start_btn = ttk.Button(ctrl, text="Scan & Choose…", command=self.scan_and_choose)
+        # Primary actions
+        action = tk.Frame(body, bg=self.BG)
+        action.pack(fill="x", pady=(2, 6))
+        self.start_btn = ttk.Button(action, text="Scan & Choose…",
+                                    style="Accent.TButton", command=self.scan_and_choose)
         self.start_btn.pack(side="left")
-        self.cancel_btn = ttk.Button(ctrl, text="Cancel", command=self.do_cancel, state="disabled")
+        self.cancel_btn = ttk.Button(action, text="Cancel", style="Ghost.TButton",
+                                     command=self.do_cancel, state="disabled")
         self.cancel_btn.pack(side="left", padx=8)
 
-        self.prog = ttk.Progressbar(self.root, mode="determinate")
-        self.prog.pack(fill="x", **pad)
-        self.prog_lbl = ttk.Label(self.root, text="Idle.")
-        self.prog_lbl.pack(anchor="w", padx=10)
+        # Progress
+        self.prog = ttk.Progressbar(body, mode="determinate",
+                                    style="Accent.Horizontal.TProgressbar")
+        self.prog.pack(fill="x", pady=(8, 2))
+        self.prog_lbl = tk.Label(body, text="Idle.", bg=self.BG, fg=self.MUTED,
+                                 font=("Segoe UI", 9), anchor="w")
+        self.prog_lbl.pack(fill="x")
 
-        self.log = scrolledtext.ScrolledText(self.root, height=12, state="disabled",
-                                             font=("Consolas", 9), wrap="none")
-        self.log.pack(fill="both", expand=True, padx=10, pady=8)
+        # Activity log
+        log_card = self._card(body)
+        log_card.pack(fill="both", expand=True, pady=(12, 0))
+        self._section(log_card, "Activity")
+        self.log = scrolledtext.ScrolledText(log_card, height=8, state="disabled",
+                                             font=("Consolas", 9), wrap="none",
+                                             relief="flat", bd=0, bg="#fbfbfc",
+                                             fg=self.FG, highlightthickness=0)
+        self.log.pack(fill="both", expand=True, padx=14, pady=(0, 12))
 
     # --- widget helpers (main thread) ---
-    def _set_status(self, kind, text):
-        self.dot.itemconfig(self.dot_id, fill=self.DOT.get(kind, "#999"))
+    def _set_status(self, kind, text, device=None):
+        self.status_pill.config(bg=self.DOT.get(kind, "#999"),
+                                text=self.PILL.get(kind, "Status"))
         self.status_lbl.config(text=text)
+        if device is not None:
+            self.device_lbl.config(text=device)
 
     def _append_log(self, line):
         self.log.config(state="normal")
@@ -1213,20 +1300,23 @@ class ExporterApp:
     def _handle(self, kind, payload):
         if kind == "detect":
             state, name = payload
-            msg = {"disconnected": ("disconnected", "No iPhone detected — plug it in via USB."),
-                   "locked": ("locked", "iPhone connected but locked — unlock it."),
-                   "untrusted": ("untrusted", "iPhone connected — tap “Trust”, then Refresh.")}
+            msg = {"disconnected": ("disconnected", "Plug in your iPhone via USB.", "No device"),
+                   "locked": ("locked", "Unlock your iPhone to continue.", "iPhone"),
+                   "untrusted": ("untrusted", "Tap “Trust” on the iPhone, then Refresh.", "iPhone")}
             if state == "trusted":
                 self.backend = "afc"
-                self._set_status("trusted", f"Connected & trusted — {name}")
+                self._set_status("trusted", "Trusted over USB · full library available",
+                                 device=name)
             elif state == "mtp_ready":
                 self.backend = "mtp"
-                self._set_status("trusted",
-                                 f"Connected — {name}  ·  MTP mode (no Apple driver)")
+                self._set_status("trusted", "Connected over MTP · no Apple driver",
+                                 device=name)
             else:
                 if state in ("locked", "untrusted"):
                     self.backend = "afc"
-                self._set_status(*msg.get(state, ("disconnected", "No iPhone.")))
+                kind_, text_, dev_ = msg.get(
+                    state, ("disconnected", "No iPhone.", "No device"))
+                self._set_status(kind_, text_, device=dev_)
         elif kind == "status":
             self._set_status(payload[0], payload[1])
         elif kind == "log":
@@ -1281,11 +1371,7 @@ def main():
         sys.exit(1)
 
     root = tk.Tk()
-    try:
-        ttk.Style().theme_use("vista")
-    except tk.TclError:
-        pass
-    ExporterApp(root)
+    ExporterApp(root)            # sets up the (clam-based) modern theme itself
     root.mainloop()
 
 
