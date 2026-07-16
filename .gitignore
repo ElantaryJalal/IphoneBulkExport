@@ -28,3 +28,6 @@ dest/
 
 # Build log
 build.log
+
+# Run logs
+*.log

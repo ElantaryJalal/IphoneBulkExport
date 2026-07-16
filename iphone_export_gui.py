@@ -1039,8 +1039,8 @@ class ExporterApp:
     def __init__(self, root):
         self.root = root
         root.title("iPhone Exporter")
-        root.geometry("760x680")
-        root.minsize(680, 600)
+        root.geometry("760x760")
+        root.minsize(680, 660)
         root.configure(bg=self.BG)
 
         self.events = queue.Queue()
@@ -1157,6 +1157,25 @@ class ExporterApp:
         self.cancel_btn = ttk.Button(action, text="Cancel", style="Ghost.TButton",
                                      command=self.do_cancel, state="disabled")
         self.cancel_btn.pack(side="left", padx=8)
+
+        # Backup & iCloud tools
+        tools_card = self._card(body)
+        tools_card.pack(fill="x", pady=(6, 6))
+        self._section(tools_card, "Backup & iCloud")
+        trow = tk.Frame(tools_card, bg=self.CARD)
+        trow.pack(fill="x", padx=16, pady=(0, 14))
+        self.icloud_btn = ttk.Button(trow, text="Download iCloud Photos…",
+                                     style="Ghost.TButton",
+                                     command=self.icloud_download)
+        self.icloud_btn.pack(side="left")
+        self.backup_btn = ttk.Button(trow, text="Full Backup…",
+                                     style="Ghost.TButton",
+                                     command=self.full_backup)
+        self.backup_btn.pack(side="left", padx=8)
+        self.extract_btn = ttk.Button(trow, text="Extract from Backup…",
+                                      style="Ghost.TButton",
+                                      command=self.extract_backup)
+        self.extract_btn.pack(side="left")
 
         # Progress
         self.prog = ttk.Progressbar(body, mode="determinate",
@@ -1284,6 +1303,169 @@ class ExporterApp:
         self.cancel_btn.config(state="disabled")
         self.prog_lbl.config(text="Cancelling…")
 
+    # --- Backup & iCloud tools ---------------------------------------------
+    def _tools_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        for b in (self.start_btn, self.icloud_btn, self.backup_btn,
+                  self.extract_btn):
+            b.config(state=state)
+        self.cancel_btn.config(state="normal" if busy else "disabled")
+
+    def _ask_on_main(self, title, prompt, secret=False):
+        """Block a worker thread on a dialog that runs in the main thread."""
+        from tkinter import simpledialog
+        holder, ready = {}, threading.Event()
+
+        def show():
+            kw = {"parent": self.root}
+            if secret:
+                kw["show"] = "*"
+            holder["v"] = simpledialog.askstring(title, prompt, **kw)
+            ready.set()
+
+        self.root.after(0, show)
+        ready.wait()
+        return holder.get("v") or ""
+
+    def icloud_download(self):
+        """Pull the entire iCloud Photos library (originals) to a folder."""
+        import shutil as _shutil
+        if _shutil.which("icloudpd") is None:
+            try:
+                import icloudpd  # noqa: F401
+            except ImportError:
+                self._append_log("icloudpd isn't installed — run:  "
+                                 "python -m pip install icloudpd")
+                return
+        from tkinter import simpledialog
+        user = simpledialog.askstring(
+            "iCloud", "Apple ID (email):", parent=self.root)
+        if not user:
+            return
+        dest = filedialog.askdirectory(title="Folder for the iCloud library")
+        if not dest:
+            return
+        import icloud_sync
+        self.cancel.clear()
+        self._tools_busy(True)
+        self.prog.config(value=0)
+        self.prog_lbl.config(text="Signing in to iCloud…")
+        self._append_log("──────── iCloud download ────────")
+
+        def work():
+            try:
+                icloud_sync.run_download(
+                    user, dest,
+                    ask_password=lambda: self._ask_on_main(
+                        "iCloud", f"Password for {user}:", secret=True),
+                    ask_2fa=lambda: self._ask_on_main(
+                        "iCloud", "2FA code (tap Allow on your iPhone):"),
+                    log=lambda m: self._emit("log", m),
+                    progress=lambda d, t: self._emit("progress", d, t),
+                    cancel=self.cancel)
+            except Exception as e:
+                self._emit("error", f"{type(e).__name__}: {e}")
+            self._emit("finished", None)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def full_backup(self):
+        """iTunes-style full backup — WhatsApp, app data, everything."""
+        dest = filedialog.askdirectory(
+            title="Folder for the full device backup")
+        if not dest:
+            return
+        from tkinter import messagebox
+        if not messagebox.askokcancel(
+                "Full backup",
+                "This copies everything an iTunes backup holds (WhatsApp "
+                "chats & media, app data, settings).\n\nThe iPhone will ask "
+                "for its passcode — enter it on the phone.\n\nStart now?",
+                parent=self.root):
+            return
+        import device_backup
+        self.cancel.clear()
+        self._tools_busy(True)
+        self.prog.config(value=0, maximum=100)
+        self.prog_lbl.config(text="Backing up…")
+        self._append_log("──────── full device backup ────────")
+
+        def work():
+            try:
+                run_async(lambda: device_backup.run_backup(
+                    dest,
+                    progress=lambda pct: self._emit("pct", pct),
+                    log=lambda m: self._emit("log", m)))
+            except Exception as e:
+                self._emit("error", f"{type(e).__name__}: {e}")
+            self._emit("finished", None)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def extract_backup(self):
+        """Turn a full backup into browsable folders (WhatsApp, Files, …)."""
+        import backup_extract
+        backup = filedialog.askdirectory(
+            title="Pick the backup folder (the one holding Manifest.db)")
+        if not backup:
+            return
+        try:
+            info = backup_extract.backup_info(backup)
+        except Exception as e:
+            self._append_log(f"Not a backup folder: {e}")
+            return
+        if info["encrypted"]:
+            self._append_log("That backup is encrypted — extraction needs an "
+                             "unencrypted backup.")
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Extract from backup")
+        dlg.configure(bg=self.CARD)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        tk.Label(dlg, text=f"Backup of {info['device']} (iOS {info['ios']})",
+                 bg=self.CARD, fg=self.FG,
+                 font=("Segoe UI Semibold", 11)).pack(
+            anchor="w", padx=16, pady=(14, 8))
+        vars_ = {}
+        for key, preset in backup_extract.PRESETS.items():
+            v = tk.BooleanVar(value=(key == "whatsapp"))
+            vars_[key] = v
+            ttk.Checkbutton(dlg, text=preset.label, variable=v).pack(
+                anchor="w", padx=18, pady=2)
+
+        def start():
+            chosen = [k for k, v in vars_.items() if v.get()]
+            if not chosen:
+                return
+            dest = filedialog.askdirectory(title="Extract into…", parent=dlg)
+            if not dest:
+                return
+            dlg.destroy()
+            self.cancel.clear()
+            self._tools_busy(True)
+            self.prog.config(value=0)
+            self.prog_lbl.config(text="Extracting…")
+            self._append_log("──────── extracting from backup ────────")
+
+            def work():
+                try:
+                    backup_extract.extract(
+                        backup, dest, presets=chosen,
+                        log=lambda m: self._emit("log", m),
+                        progress=lambda d, t: self._emit("progress", d, t),
+                        cancel=self.cancel)
+                except Exception as e:
+                    self._emit("error", f"{type(e).__name__}: {e}")
+                self._emit("finished", None)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        ttk.Button(dlg, text="Choose destination & start",
+                   style="Accent.TButton", command=start).pack(
+            anchor="e", padx=16, pady=14)
+
     def _emit(self, kind, *payload):
         self.events.put((kind, payload if len(payload) != 1 else payload[0]))
 
@@ -1327,6 +1509,9 @@ class ExporterApp:
             done, total = payload
             self.prog.config(maximum=max(total, 1), value=done)
             self.prog_lbl.config(text=f"{done} / {total} files")
+        elif kind == "pct":
+            self.prog.config(maximum=100, value=payload)
+            self.prog_lbl.config(text=f"Backing up… {payload:.0f}%")
         elif kind == "error":
             self._append_log("ERROR: " + payload)
         elif kind == "records":
@@ -1353,8 +1538,7 @@ class ExporterApp:
                 self._append_log("Failures saved to "
                                  + os.path.join(s["dest"], "failures.txt"))
         elif kind == "finished":
-            self.start_btn.config(state="normal")
-            self.cancel_btn.config(state="disabled")
+            self._tools_busy(False)
 
 
 def main():

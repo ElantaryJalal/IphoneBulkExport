@@ -26,6 +26,24 @@ the Apple Mobile Device driver is present, and automatically falls back to
 - On finish: a **summary** (copied / skipped / failed), and failures saved to
   `failures.txt` in the destination.
 
+**Backup & iCloud card** (below the main actions)
+- **Download iCloud Photos…** — pulls your *entire* iCloud Photos library
+  (full-resolution originals) to a folder, straight from Apple's servers. This
+  is the answer when the phone shows "Optimize iPhone Storage" and the
+  originals aren't on the device anymore. Asks for your Apple ID, password and
+  a 2FA code (shown on your iPhone). Fully **resumable** — run it again and it
+  skips what's already downloaded. Needs `python -m pip install icloudpd`.
+- **Full Backup…** — an iTunes-style backup of the whole phone over USB:
+  WhatsApp chats & media, voice memos, Messages attachments, app data. The
+  iPhone asks for its passcode when the backup starts. (Engine:
+  `device_backup.py`, also usable from the command line.)
+- **Extract from Backup…** — opens a full backup and copies chosen categories
+  out into normal, browsable folders (original names, dates and per-chat
+  structure): **WhatsApp media**, **Files app / Downloads**, **Voice Memos**,
+  **Messages attachments**, **camera roll**. (Engine: `backup_extract.py` —
+  `python backup_extract.py --backup <folder> --list` shows what a backup
+  holds.) Encrypted backups are detected and refused with an explanation.
+
 **Selection window** (opens after a scan)
 - A checkable table of **every item** — tick/untick each row's box (Name, Date,
   Type, Size).
