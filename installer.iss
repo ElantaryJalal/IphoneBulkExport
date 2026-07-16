@@ -11,7 +11,7 @@
 ; Compile from the project root so the relative paths below resolve.
 
 #define MyAppName "iPhone Bulk Exporter"
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.2"
 #define MyAppPublisher "Jalal Elantary"
 #define MyAppExe "iPhoneExporter.exe"
 #define MyAppUrl "https://iphone-bulk-export.vercel.app/"

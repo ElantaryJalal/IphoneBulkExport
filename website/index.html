@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>iPhone Exporter — bulk-export your iPhone photos &amp; videos over USB</title>
-<meta name="description" content="A free Windows app that copies all your iPhone photos and videos to your PC over USB. No iCloud, no subscription. Pick exactly what you want, keep originals or convert to JPG/MP4." />
+<meta name="description" content="A free Windows app that copies all your iPhone photos and videos to your PC over USB — and can download your full iCloud Photos library, make a complete device backup, and extract WhatsApp media into browsable folders. Keep originals or convert to JPG/MP4." />
 
 <!-- Open Graph / social preview -->
 <meta property="og:type" content="website" />
@@ -126,11 +126,13 @@
     </nav>
 
     <div class="hero-inner">
-      <span class="pill">Free • Windows • No iCloud, no subscription</span>
-      <h1>Get <span class="grad">every photo &amp; video</span><br/>off your iPhone — over USB.</h1>
-      <p class="sub">A tiny desktop app that bulk-copies your entire camera roll to your PC.
-        Browse it as a thumbnail grid and pick exactly what you want, keep originals or
-        convert to JPG/MP4, and pick up where you left off if it stops. No cloud required.</p>
+      <span class="pill">Free • Windows • No subscription</span>
+      <h1>Get <span class="grad">everything</span><br/>off your iPhone.</h1>
+      <p class="sub">Bulk-copy your camera roll over USB, download your <b>entire iCloud
+        Photos library</b> (even what’s no longer on the phone), make a <b>full device
+        backup</b>, and pull <b>WhatsApp photos, videos &amp; voice notes</b> out into
+        normal folders. Keep originals or convert to JPG/MP4 — and everything resumes
+        where it left off.</p>
 
       <div class="cta">
         <a id="download" class="btn btn-primary" href="#">⬇ Download for Windows</a>
@@ -164,11 +166,20 @@
       <div class="card"><div class="ic">🖼️</div><h3>Keep or convert</h3>
         <p>Keep originals (HEIC/MOV), or convert to universal <b>JPG</b> and <b>MP4</b> on the
         way out.</p></div>
-      <div class="card"><div class="ic">☁️</div><h3>Honest about iCloud</h3>
-        <p>Photos stored only in iCloud aren’t on the phone — the app lists them so you know
-        exactly what to download.</p></div>
-      <div class="card"><div class="ic">🔌</div><h3>No cloud, no account</h3>
-        <p>Everything happens locally over the USB cable. Your photos never touch a server.</p></div>
+      <div class="card"><div class="ic">☁️</div><h3>iCloud download built in</h3>
+        <p>“Optimize iPhone Storage” means many originals only live in iCloud. One click signs
+        in with your Apple ID (2FA supported) and downloads the <b>whole library</b> —
+        full-resolution, resumable.</p></div>
+      <div class="card"><div class="ic">💾</div><h3>Full device backup</h3>
+        <p>An iTunes-style backup of the entire phone over USB — WhatsApp chats &amp; media,
+        voice memos, app data, settings — with live progress.</p></div>
+      <div class="card"><div class="ic">💬</div><h3>WhatsApp &amp; app files, browsable</h3>
+        <p>Opens a backup and extracts <b>WhatsApp media</b>, <b>Files-app downloads</b>,
+        <b>voice memos</b> and <b>message attachments</b> into normal folders — original
+        names, dates and per-chat structure.</p></div>
+      <div class="card"><div class="ic">🔌</div><h3>Private by design</h3>
+        <p>USB export and backups happen locally — nothing is uploaded. The optional iCloud
+        download talks only to Apple’s servers, straight to your PC.</p></div>
     </div>
   </section>
 
@@ -217,11 +228,20 @@
         (Apple Mobile Device Support) automatically — that’s the only Apple piece, and you never
         have to download or open iTunes. If it can’t install (offline, etc.), the app falls back to
         Windows’ built-in <b>MTP</b> connection and still works. It never signs in anywhere.</p></details>
-    <details><summary>Some photos didn’t copy</summary>
+    <details><summary>Some photos didn’t copy over USB</summary>
       <p>Those are stored <b>only in iCloud</b> (with “Optimize iPhone Storage” on), so they aren’t
         physically on the phone — no USB tool can fetch them. The app lists them in
-        <code>not_on_device.txt</code>. Turn on <b>Settings → Photos → Download and Keep Originals</b>,
-        let it sync, then run again.</p></details>
+        <code>not_on_device.txt</code>, and the <b>Download iCloud Photos</b> button fetches them
+        straight from iCloud to your PC — no phone storage needed, resumable, full resolution.</p></details>
+    <details><summary>Can it save my WhatsApp photos, videos and voice notes?</summary>
+      <p>Yes — media you saved to the camera roll comes with the normal export, and everything
+        else (chat photos/videos, voice notes, documents) is captured by <b>Full Backup</b> and
+        turned into normal, browsable folders by <b>Extract from Backup</b> — organized per chat,
+        with original dates.</p></details>
+    <details><summary>Does the iCloud download see my password?</summary>
+      <p>Your Apple ID and password go <b>only to Apple’s servers</b> (via the open-source
+        icloudpd engine) to sign in — never to us. Apple sends a 2FA code to your iPhone to
+        confirm it’s you.</p></details>
     <details><summary>Is it safe? Where do my photos go?</summary>
       <p>Straight from the cable to the folder you choose — nothing is uploaded. The code is open
         source on GitHub.</p></details>
@@ -247,8 +267,8 @@
   // Recommended: a GitHub Releases asset (handles big files & version pinning).
   const DOWNLOAD_URL = "https://github.com/ElantaryJalal/IphoneBulkExport/releases/latest/download/iPhoneExporterSetup.exe";
   const GITHUB_URL   = "https://github.com/ElantaryJalal/IphoneBulkExport";
-  const VERSION      = "v1.1";
-  const SIZE_TEXT    = "~123 MB";
+  const VERSION      = "v1.2";
+  const SIZE_TEXT    = "~140 MB";
   /* ───────────────────────────────────────────────────────────────────────────── */
 
   document.getElementById("download").href = DOWNLOAD_URL;

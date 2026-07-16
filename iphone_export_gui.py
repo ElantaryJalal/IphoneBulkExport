@@ -1329,14 +1329,11 @@ class ExporterApp:
 
     def icloud_download(self):
         """Pull the entire iCloud Photos library (originals) to a folder."""
-        import shutil as _shutil
-        if _shutil.which("icloudpd") is None:
-            try:
-                import icloudpd  # noqa: F401
-            except ImportError:
-                self._append_log("icloudpd isn't installed — run:  "
-                                 "python -m pip install icloudpd")
-                return
+        import icloud_sync
+        if not icloud_sync.icloudpd_available():
+            self._append_log("icloudpd isn't installed — run:  "
+                             "python -m pip install icloudpd")
+            return
         from tkinter import simpledialog
         user = simpledialog.askstring(
             "iCloud", "Apple ID (email):", parent=self.root)
@@ -1542,10 +1539,10 @@ class ExporterApp:
 
 
 def main():
+    import sys
     try:
         import pymobiledevice3  # noqa: F401
     except ImportError:
-        import sys
         root = tk.Tk(); root.withdraw()
         from tkinter import messagebox
         messagebox.showerror(

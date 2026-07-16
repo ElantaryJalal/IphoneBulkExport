@@ -49,7 +49,7 @@ if errorlevel 1 goto :err
 echo.
 echo === Installing ONLY the needed packages ===
 "%PY%" -m pip install --upgrade pip setuptools wheel
-"%PY%" -m pip install pymobiledevice3 pillow pillow-heif pyinstaller pywin32
+"%PY%" -m pip install pymobiledevice3 pillow pillow-heif pyinstaller pywin32 icloudpd
 if errorlevel 1 goto :err
 
 echo.
@@ -81,12 +81,19 @@ REM Built from a clean python.org venv: _ctypes/_ssl/_tkinter/_sqlite3 and their
 REM companion DLLs live in the standard layout, so PyInstaller resolves them
 REM automatically (no Anaconda Library\bin PATH hack needed).
 REM pywin32 (win32com/pythoncom) is bundled for the GUI's MTP fallback path.
+REM icloudpd ships a standalone console binary inside its wheel; bundle that
+REM (icloud_sync runs it as a child process — see _icloudpd_cmd).
+copy /Y "%VENV%\Lib\site-packages\icloudpd\icloudpd" "%~dp0icloudpd.exe" >nul
 "%PY%" -m PyInstaller --noconfirm --onefile --windowed --name iPhoneExporter ^
   --add-binary "%FFMPEG%;." ^
+  --add-binary "%~dp0icloudpd.exe;icloudpd_bin" ^
   --collect-all pymobiledevice3 ^
   --collect-all pillow_heif ^
   --collect-all construct ^
   --hidden-import iphone_export_mtp ^
+  --hidden-import icloud_sync ^
+  --hidden-import device_backup ^
+  --hidden-import backup_extract ^
   --hidden-import win32com.client ^
   --hidden-import win32timezone ^
   --hidden-import PIL.ImageTk ^

@@ -39,10 +39,26 @@ _RE_PWD_PROMPT = re.compile(r"iCloud Password for", re.I)
 
 
 def _icloudpd_cmd():
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle: the standalone icloudpd.exe (the console binary
+        # icloudpd ships inside its wheel) is packaged as a data file.
+        bundled = os.path.join(
+            getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)),
+            "icloudpd_bin", "icloudpd.exe")
+        if os.path.isfile(bundled):
+            return [bundled]
+        raise FileNotFoundError("bundled icloudpd.exe is missing")
     exe = shutil.which("icloudpd")
     if exe:
         return [exe]
     return [sys.executable, "-m", "icloudpd"]
+
+
+def icloudpd_available():
+    try:
+        return bool(_icloudpd_cmd())
+    except FileNotFoundError:
+        return False
 
 
 def run_download(username, dest, ask_password, ask_2fa=None, log=print,

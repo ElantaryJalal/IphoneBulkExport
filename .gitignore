@@ -31,3 +31,6 @@ build.log
 
 # Run logs
 *.log
+
+# Staged icloudpd helper binary (copied from the build venv at build time)
+icloudpd.exe
